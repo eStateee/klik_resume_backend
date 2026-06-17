@@ -14,7 +14,20 @@ class Location(models.Model):
     def __str__(self):
         return f"{self.name} ({self.branch.name})"
 
-class TutorProfile(models.Model):
+class AuthenticatedModelMixin:
+    @property
+    def is_authenticated(self):
+        return True
+
+    @property
+    def is_anonymous(self):
+        return False
+
+    @property
+    def is_active(self):
+        return True
+
+class TutorProfile(AuthenticatedModelMixin, models.Model):
     tutor_crm_id = models.CharField(max_length=100, unique=True, null=True, blank=True, verbose_name="ID преподавателя из CRM")
     tutor_name = models.CharField(max_length=255, verbose_name="ФИО преподавателя")
     branch = models.ForeignKey(Branch, on_delete=models.PROTECT, verbose_name="Филиал", related_name="tutors")
@@ -27,7 +40,7 @@ class TutorProfile(models.Model):
     def __str__(self):
         return self.tutor_name
 
-class Manager(models.Model):
+class Manager(AuthenticatedModelMixin, models.Model):
     name = models.CharField(max_length=255, verbose_name="ФИО менеджера")
     telegram = models.CharField(max_length=255, null=True, blank=True, verbose_name="Telegram")
     location = models.ForeignKey(Location, on_delete=models.PROTECT, verbose_name="Локация", related_name="managers")
@@ -123,3 +136,7 @@ class News(models.Model):
 
     def __str__(self):
         return self.title
+    
+    class Meta:
+        verbose_name = 'Новость'
+        verbose_name_plural = "Новости"

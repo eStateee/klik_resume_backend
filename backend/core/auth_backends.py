@@ -21,9 +21,12 @@ class PasswordlessAuthBackend(BaseBackend):
             return None
 
     def get_user(self, user_id):
-        # Поскольку у нас кастомная аутентификация без стандартной модели User,
-        # get_user может быть сложно реализовать для сессий.
-        # Но мы используем JWT, поэтому этот метод может и не понадобиться,
-        # либо мы можем возвращать нужный объект в зависимости от типа.
-        # В данном случае, мы полагаемся на JWT токены.
-        pass
+        try:
+            return Manager.objects.get(pk=user_id)
+        except Manager.DoesNotExist:
+            pass
+        try:
+            return TutorProfile.objects.get(pk=user_id)
+        except TutorProfile.DoesNotExist:
+            return None
+

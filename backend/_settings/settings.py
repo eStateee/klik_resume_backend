@@ -22,7 +22,8 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt',
     'corsheaders',
     
-    # Local apps
+    'drf_spectacular',
+    'storages',
     'core',
 ]
 
@@ -91,8 +92,9 @@ CORS_ALLOW_ALL_ORIGINS = True
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
-    )
+        'core.authentication.CustomJWTAuthentication',
+    ),
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
 }
 
 SIMPLE_JWT = {
@@ -124,3 +126,24 @@ CELERY_TIMEZONE = TIME_ZONE
 CRM_API_URL = os.environ.get('CRM_API_URL', 'https://demo.alfacrm.pro')
 CRM_EMAIL = os.environ.get('CRM_EMAIL', 'test@test.com')
 CRM_API_KEY = os.environ.get('CRM_API_KEY', 'test_key')
+CRM_TOKEN_CACHE_TIMEOUT = int(os.environ.get('CRM_TOKEN_CACHE_TIMEOUT', 3600))
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'KLik API',
+    'DESCRIPTION': 'KLik API',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'COMPONENT_SPLIT_REQUEST': True,
+}
+
+# Yandex Cloud S3 Settings
+AWS_ACCESS_KEY_ID = os.environ.get('AWS_ACCESS_KEY_ID')
+AWS_SECRET_ACCESS_KEY = os.environ.get('AWS_SECRET_ACCESS_KEY')
+AWS_STORAGE_BUCKET_NAME = os.environ.get('AWS_STORAGE_BUCKET_NAME')
+AWS_S3_ENDPOINT_URL = os.environ.get('AWS_S3_ENDPOINT_URL', 'https://storage.yandexcloud.net')
+AWS_S3_REGION_NAME = os.environ.get('AWS_S3_REGION_NAME', 'ru-central1')
+AWS_DEFAULT_ACL = 'private'
+AWS_QUERYSTRING_AUTH = True
+
+if AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY:
+    DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'

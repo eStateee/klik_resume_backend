@@ -53,3 +53,135 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             token['branch_id'] = user.branch.id if user.branch else None
 
         return token
+
+from rest_framework import serializers
+from .models import Group, Student, Resume, ParentReview, News, Category, Subcategory, Module, Lesson, TutorModule
+from django.utils import timezone
+class GroupSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Group
+        fields = ['id', 'crm_group_id', 'name', 'custom_aerodromnaya', 'branch', 'tutor']
+
+class StudentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Student
+        fields = ['id', 'student_crm_id', 'student_name', 'study_start_date', 'branch', 'group']
+
+class ResumeSerializer(serializers.ModelSerializer):
+    student_crm_id = serializers.CharField(write_only=True)
+    student = serializers.PrimaryKeyRelatedField(read_only=True)
+
+    class Meta:
+        model = Resume
+        fields = ['id', 'student', 'student_crm_id', 'content', 'is_verified', 'created_at', 'updated_at']
+        read_only_fields = ['is_verified', 'created_at', 'updated_at', 'student']
+
+    def create(self, validated_data):
+        student_crm_id = validated_data.pop('student_crm_id')
+        from django.shortcuts import get_object_or_404
+        from .models import Student
+        student = get_object_or_404(Student, student_crm_id=student_crm_id)
+        validated_data['student'] = student
+        return super().create(validated_data)
+
+class ParentReviewSerializer(serializers.ModelSerializer):
+    student_crm_id = serializers.CharField(write_only=True)
+    student = serializers.PrimaryKeyRelatedField(read_only=True)
+
+    class Meta:
+        model = ParentReview
+        fields = ['id', 'student', 'student_crm_id', 'content', 'created_at', 'updated_at']
+        read_only_fields = ['created_at', 'updated_at', 'student']
+
+    def create(self, validated_data):
+        student_crm_id = validated_data.pop('student_crm_id')
+        from django.shortcuts import get_object_or_404
+        from .models import Student
+        student = get_object_or_404(Student, student_crm_id=student_crm_id)
+        validated_data['student'] = student
+        return super().create(validated_data)
+
+class NewsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = News
+        fields = ['id', 'title', 'content', 'created_at']
+
+class LessonSerializer(serializers.ModelSerializer):
+    file_url = serializers.SerializerMethodField()
+    archive_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Lesson
+        fields = ['id', 'file_url', 'archive_url']
+
+    def _generate_presigned_url(self, file_field):
+        if not file_field:
+            return None
+        try:
+            import boto3
+            from django.conf import settings
+            s3_client = boto3.client('s3',
+                endpoint_url=getattr(settings, 'AWS_S3_ENDPOINT_URL', None),
+                aws_access_key_id=getattr(settings, 'AWS_ACCESS_KEY_ID', None),
+                aws_secret_access_key=getattr(settings, 'AWS_SECRET_ACCESS_KEY', None),
+                region_name=getattr(settings, 'AWS_S3_REGION_NAME', None)
+            )
+            url = s3_client.generate_presigned_url(
+                'get_object',
+                Params={'Bucket': getattr(settings, 'AWS_STORAGE_BUCKET_NAME', ''), 'Key': str(file_field)},
+                ExpiresIn=900
+            )
+            return url
+        except Exception:
+            return getattr(file_field, 'url', None)
+
+    def get_file_url(self, obj):
+        return self._generate_presigned_url(obj.file)
+
+    def get_archive_url(self, obj):
+        return self._generate_presigned_url(obj.archive)
+
+class ModuleSerializer(serializers.ModelSerializer):
+    is_accessible = serializers.SerializerMethodField()
+    lessons = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Module
+        fields = ['id', 'name', 'validity_period', 'is_active', 'is_accessible', 'lessons']
+
+    def get_is_accessible(self, obj):
+        request = self.context.get('request')
+        if not request or not request.auth:
+            return False
+        
+        user_id = request.auth.get('user_id')
+        role = request.auth.get('role')
+
+        if role == 'tutor':
+            now = timezone.now()
+            return TutorModule.objects.filter(
+                tutor_id=user_id,
+                module=obj,
+                expires_at__gt=now
+            ).exists()
+        return False
+
+    def get_lessons(self, obj):
+        if self.get_is_accessible(obj):
+            lessons = obj.lessons.all()
+            return LessonSerializer(lessons, many=True, context=self.context).data
+        return []
+
+class SubcategorySerializer(serializers.ModelSerializer):
+    modules = ModuleSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Subcategory
+        fields = ['id', 'name', 'is_active', 'modules']
+
+class CategorySerializer(serializers.ModelSerializer):
+    subcategories = SubcategorySerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Category
+        fields = ['id', 'name', 'is_active', 'subcategories']

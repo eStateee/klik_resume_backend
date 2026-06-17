@@ -1,0 +1,604 @@
+openapi: 3.0.3
+info:
+  title: KLik API
+  version: 1.0.0
+  description: KLik API
+paths:
+  /api/auth/login/:
+    post:
+      operationId: auth_login_create
+      description: |-
+        Takes a set of user credentials and returns an access and refresh JSON web
+        token pair to prove the authentication of those credentials.
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomTokenObtainPairRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CustomTokenObtainPairRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CustomTokenObtainPairRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomTokenObtainPair'
+          description: ''
+  /api/auth/token/refresh/:
+    post:
+      operationId: auth_token_refresh_create
+      description: |-
+        Takes a refresh type JSON web token and returns an access type JSON web
+        token if the refresh token is valid.
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenRefreshRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TokenRefreshRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TokenRefreshRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenRefresh'
+          description: ''
+  /api/clients/:
+    get:
+      operationId: clients_list
+      tags:
+      - clients
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Student'
+          description: ''
+  /api/clients/{id}/:
+    get:
+      operationId: clients_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this student.
+        required: true
+      tags:
+      - clients
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Student'
+          description: ''
+  /api/clients/all/:
+    get:
+      operationId: clients_all_retrieve
+      tags:
+      - clients
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Student'
+          description: ''
+  /api/groups/:
+    get:
+      operationId: groups_list
+      tags:
+      - groups
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Group'
+          description: ''
+  /api/groups/{id}/:
+    get:
+      operationId: groups_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this group.
+        required: true
+      tags:
+      - groups
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Group'
+          description: ''
+  /api/groups/{id}/clients/:
+    get:
+      operationId: groups_clients_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this group.
+        required: true
+      tags:
+      - groups
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Group'
+          description: ''
+  /api/resumes/:
+    get:
+      operationId: resumes_list
+      tags:
+      - resumes
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Resume'
+          description: ''
+    post:
+      operationId: resumes_create
+      tags:
+      - resumes
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResumeRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ResumeRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ResumeRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Resume'
+          description: ''
+  /api/resumes/{id}/:
+    get:
+      operationId: resumes_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this resume.
+        required: true
+      tags:
+      - resumes
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Resume'
+          description: ''
+    put:
+      operationId: resumes_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this resume.
+        required: true
+      tags:
+      - resumes
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResumeRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ResumeRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ResumeRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Resume'
+          description: ''
+    patch:
+      operationId: resumes_partial_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this resume.
+        required: true
+      tags:
+      - resumes
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedResumeRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedResumeRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedResumeRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Resume'
+          description: ''
+    delete:
+      operationId: resumes_destroy
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this resume.
+        required: true
+      tags:
+      - resumes
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/resumes/{id}/verify/:
+    post:
+      operationId: resumes_verify_create
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this resume.
+        required: true
+      tags:
+      - resumes
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResumeRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ResumeRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ResumeRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Resume'
+          description: ''
+  /api/resumes/client/:
+    get:
+      operationId: resumes_client_retrieve
+      tags:
+      - resumes
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Resume'
+          description: ''
+  /api/reviews/:
+    post:
+      operationId: reviews_create
+      tags:
+      - reviews
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ParentReviewRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ParentReviewRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ParentReviewRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ParentReview'
+          description: ''
+  /api/reviews/{student_crm_id}/:
+    get:
+      operationId: reviews_list
+      parameters:
+      - in: path
+        name: student_crm_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - reviews
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ParentReview'
+          description: ''
+components:
+  schemas:
+    CustomTokenObtainPair:
+      type: object
+      properties:
+        phone_number:
+          type: string
+      required:
+      - phone_number
+    CustomTokenObtainPairRequest:
+      type: object
+      properties:
+        phone_number:
+          type: string
+          minLength: 1
+      required:
+      - phone_number
+    Group:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        crm_group_id:
+          type: string
+          title: ID группы из CRM
+          maxLength: 100
+        name:
+          type: string
+          title: Название группы
+          maxLength: 255
+        custom_aerodromnaya:
+          type: boolean
+          title: Кастомная Аэродромная
+        branch:
+          type: integer
+          title: Филиал
+        tutor:
+          type: integer
+          nullable: true
+          title: Тьютор
+      required:
+      - branch
+      - crm_group_id
+      - id
+      - name
+    ParentReview:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        student:
+          type: integer
+          readOnly: true
+        content:
+          type: string
+          title: Текст отзыва
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+          title: Создано
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+          title: Обновлено
+      required:
+      - content
+      - created_at
+      - id
+      - student
+      - updated_at
+    ParentReviewRequest:
+      type: object
+      properties:
+        student_crm_id:
+          type: string
+          writeOnly: true
+          minLength: 1
+        content:
+          type: string
+          minLength: 1
+          title: Текст отзыва
+      required:
+      - content
+      - student_crm_id
+    PatchedResumeRequest:
+      type: object
+      properties:
+        student_crm_id:
+          type: string
+          writeOnly: true
+          minLength: 1
+        content:
+          type: string
+          minLength: 1
+          title: Текст резюме
+    Resume:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        student:
+          type: integer
+          readOnly: true
+        content:
+          type: string
+          title: Текст резюме
+        is_verified:
+          type: boolean
+          readOnly: true
+          title: Проверено
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+          title: Создано
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+          title: Обновлено
+      required:
+      - content
+      - created_at
+      - id
+      - is_verified
+      - student
+      - updated_at
+    ResumeRequest:
+      type: object
+      properties:
+        student_crm_id:
+          type: string
+          writeOnly: true
+          minLength: 1
+        content:
+          type: string
+          minLength: 1
+          title: Текст резюме
+      required:
+      - content
+      - student_crm_id
+    Student:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        student_crm_id:
+          type: string
+          title: ID ученика из CRM
+          maxLength: 100
+        student_name:
+          type: string
+          title: ФИО ученика
+          maxLength: 255
+        study_start_date:
+          type: string
+          format: date
+          nullable: true
+          title: Дата начала обучения
+        branch:
+          type: integer
+          title: Филиал
+        group:
+          type: integer
+          nullable: true
+          title: Группа
+      required:
+      - branch
+      - id
+      - student_crm_id
+      - student_name
+    TokenRefresh:
+      type: object
+      properties:
+        access:
+          type: string
+          readOnly: true
+      required:
+      - access
+    TokenRefreshRequest:
+      type: object
+      properties:
+        refresh:
+          type: string
+          writeOnly: true
+          minLength: 1
+      required:
+      - refresh
+  securitySchemes:
+    jwtAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

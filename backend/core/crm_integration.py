@@ -36,9 +36,10 @@ def login_to_alfa_crm() -> Optional[str]:
             token_data = response.json()
             token = token_data.get("token")
 
-            # Сохраняем токен в кэше Redis на 1 час (3600 секунд) через django-redis
+            # Сохраняем токен в кэше Redis на время из настроек
             if token:
-                cache.set("crm_auth_token", token, 3600)
+                cache_timeout = getattr(settings, 'CRM_TOKEN_CACHE_TIMEOUT', 3600)
+                cache.set("crm_auth_token", token, int(cache_timeout))
             return token
         else:
             return None
