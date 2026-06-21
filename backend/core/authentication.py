@@ -1,55 +1,81 @@
-from rest_framework_simplejwt.authentication import JWTAuthentication
+import logging
+
 from rest_framework.exceptions import AuthenticationFailed
+from rest_framework_simplejwt.authentication import JWTAuthentication
+
 from .models import Manager, TutorProfile
 
+logger = logging.getLogger("core")
+
+
 class CustomJWTAuthentication(JWTAuthentication):
+    """
+    Кастомный JWT-аутентификатор.
+    Использует поле 'role' из payload токена для выборки нужной модели.
+    """
+
     def get_user(self, validated_token):
         """
-        Attempts to find and return a user using the given validated token.
-        Since we have a passwordless custom auth with Manager and TutorProfile
-        models instead of the default User model, we use the role from the token
-        to fetch the correct model instance.
+        Находит пользователя по user_id и role из токена.
+        Менеджеры и тьюторы хранятся в разных таблицах,
+        поэтому стандартный механизм поиска через User не подходит.
         """
         try:
-            user_id = validated_token['user_id']
+            user_id = validated_token["user_id"]
         except KeyError:
-            raise AuthenticationFailed("Token contained no recognizable user identification", code="token_not_valid")
+            raise AuthenticationFailed(
+                "Токен не содержит идентификатора пользователя",
+                code="token_not_valid",
+            )
 
-        role = validated_token.get('role')
+        role = validated_token.get("role")
 
-        if role == 'manager':
+        if role == "manager":
             try:
-                user = Manager.objects.get(id=user_id)
+                return Manager.objects.get(id=user_id)
             except Manager.DoesNotExist:
-                raise AuthenticationFailed("Manager not found", code="user_not_found")
-        elif role == 'tutor':
+                logger.error("CustomJWTAuthentication: Manager id=%s не найден", user_id)
+                raise AuthenticationFailed(
+                    "Менеджер не найден", code="user_not_found"
+                )
+
+        if role == "tutor":
             try:
-                user = TutorProfile.objects.get(id=user_id)
+                return TutorProfile.objects.get(id=user_id)
             except TutorProfile.DoesNotExist:
-                raise AuthenticationFailed("Tutor not found", code="user_not_found")
-        else:
-            # Fallback to standard Django user model (useful for django superusers or admins using API)
-            try:
-                return super().get_user(validated_token)
-            except Exception:
-                raise AuthenticationFailed("Invalid role or user not found in token", code="user_not_found")
+                logger.error("CustomJWTAuthentication: TutorProfile id=%s не найден", user_id)
+                raise AuthenticationFailed(
+                    "Тьютор не найден", code="user_not_found"
+                )
 
-        return user
+        # Fallback для суперпользователей Django Admin (без кастомной роли)
+        try:
+            return super().get_user(validated_token)
+        except AuthenticationFailed:
+            raise
+        except Exception as exc:
+            logger.error(
+                "CustomJWTAuthentication: ошибка при поиске пользователя без роли: %s", exc
+            )
+            raise AuthenticationFailed(
+                "Невалидная роль или пользователь не найден", code="user_not_found"
+            )
 
-# Register OpenApiAuthenticationExtension for drf-spectacular documentation
+
+# Регистрация OpenApiAuthenticationExtension для drf-spectacular
 try:
     from drf_spectacular.extensions import OpenApiAuthenticationExtension
 
     class CustomJWTAuthenticationScheme(OpenApiAuthenticationExtension):
-        target_class = 'core.authentication.CustomJWTAuthentication'
-        name = 'jwtAuth'
+        target_class = "core.authentication.CustomJWTAuthentication"
+        name = "jwtAuth"
 
         def get_security_definition(self, auto_schema):
             return {
-                'type': 'http',
-                'scheme': 'bearer',
-                'bearerFormat': 'JWT',
+                "type": "http",
+                "scheme": "bearer",
+                "bearerFormat": "JWT",
             }
+
 except ImportError:
     pass
-

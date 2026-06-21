@@ -4,8 +4,12 @@ from datetime import timedelta
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'django-insecure-q&fidfi1f+vqdpfxo9ei!me!guhn*tz)8*4*&2n#wty07a7%^2')
+SECRET_KEY_ENV = os.environ.get('DJANGO_SECRET_KEY')
 DEBUG = os.environ.get('DEBUG', 'True') == 'True'
+
+if not SECRET_KEY_ENV and not DEBUG:
+    raise RuntimeError("DJANGO_SECRET_KEY must be set in production (DEBUG=False).")
+SECRET_KEY = SECRET_KEY_ENV or 'django-insecure-q&fidfi1f+vqdpfxo9ei!me!guhn*tz)8*4*&2n#wty07a7%^2'
 ALLOWED_HOSTS = ['*']
 CSRF_TRUSTED_ORIGINS = ['http://localhost:8000', 'http://127.0.0.1:8000']
 

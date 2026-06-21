@@ -1,16 +1,59 @@
 from rest_framework_simplejwt.views import TokenObtainPairView
-from .serializers import CustomTokenObtainPairSerializer
-from rest_framework import viewsets
+from rest_framework import viewsets, status
 from rest_framework.permissions import IsAuthenticated
-from .models import Group, Student, Resume, ParentReview, News, Category, Module
-from .serializers import GroupSerializer, StudentSerializer, ResumeSerializer, ParentReviewSerializer, NewsSerializer, CategorySerializer, ModuleSerializer
-from .permissions import IsTutor, IsManager, IsSeniorTutorOrManager
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework import status
+from rest_framework.views import APIView
+
+from .serializers import CustomTokenObtainPairSerializer
+from .models import Group, Student, Resume, ParentReview, News, Category, Module, Manager, TutorProfile
+from .serializers import (
+    GroupSerializer, StudentSerializer, ResumeSerializer,
+    ParentReviewSerializer, NewsSerializer, CategorySerializer,
+    ModuleSerializer
+)
+from .permissions import IsTutor, IsManager, IsSeniorTutorOrManager
+
 
 class PasswordlessLoginView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
+
+
+class ProfileDetailView(APIView):
+    """
+    Информация о текущем пользователе (зависит от роли — Manager или TutorProfile).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        
+        if isinstance(user, Manager):
+            return Response({
+                "id": user.id,
+                "role": "manager",
+                "name": user.name,
+                "phone": user.phone,
+                "is_senior": user.is_senior,
+                "telegram": user.telegram,
+                "location_id": user.location_id,
+                "branch_id": user.location.branch_id if user.location else None
+            })
+        elif isinstance(user, TutorProfile):
+            return Response({
+                "id": user.id,
+                "role": "tutor",
+                "tutor_name": user.tutor_name,
+                "phone_number": user.phone_number,
+                "is_senior": user.is_senior,
+                "branch_id": user.branch_id,
+                "avatar_url": user.avatar_url,
+                "dob": user.dob,
+                "note": user.note
+            })
+        
+        return Response({"detail": "Unknown profile type"}, status=status.HTTP_400_BAD_REQUEST)
+
 
 class GroupViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = GroupSerializer
@@ -32,7 +75,9 @@ class GroupViewSet(viewsets.ReadOnlyModelViewSet):
             else:
                 return Group.objects.filter(tutor_id=user_id)
         elif role == 'manager':
+            # Менеджеры могут видеть группы в рамках своего филиала
             return Group.objects.filter(branch_id=branch_id)
+        
         return Group.objects.none()
 
     @action(detail=True, methods=['get'])
@@ -41,6 +86,7 @@ class GroupViewSet(viewsets.ReadOnlyModelViewSet):
         students = group.students.all()
         serializer = StudentSerializer(students, many=True)
         return Response(serializer.data)
+
 
 class StudentViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = StudentSerializer
@@ -63,19 +109,23 @@ class StudentViewSet(viewsets.ReadOnlyModelViewSet):
                 return Student.objects.filter(group__tutor_id=user_id)
         elif role == 'manager':
             return Student.objects.filter(branch_id=branch_id)
+            
         return Student.objects.none()
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated, IsSeniorTutorOrManager])
     def all(self, request):
-        if not (IsManager().has_permission(request, self) or (IsTutor().has_permission(request, self) and request.auth.get('is_senior'))):
-            return Response(status=status.HTTP_403_FORBIDDEN)
         qs = self.get_queryset()
         serializer = self.get_serializer(qs, many=True)
         return Response(serializer.data)
 
+
 class ResumeViewSet(viewsets.ModelViewSet):
     serializer_class = ResumeSerializer
-    permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        if self.action in ['destroy', 'verify']:
+            return [IsAuthenticated(), IsSeniorTutorOrManager()]
+        return [IsAuthenticated()]
 
     def get_queryset(self):
         auth = self.request.auth
@@ -94,6 +144,7 @@ class ResumeViewSet(viewsets.ModelViewSet):
                 return Resume.objects.filter(student__group__tutor_id=user_id)
         elif role == 'manager':
             return Resume.objects.filter(student__branch_id=branch_id)
+            
         return Resume.objects.none()
 
     @action(detail=False, methods=['get'], url_path='client')
@@ -105,17 +156,13 @@ class ResumeViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(qs, many=True)
         return Response(serializer.data)
 
-    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated, IsSeniorTutorOrManager])
+    @action(detail=True, methods=['post'])
     def verify(self, request, pk=None):
         resume = self.get_object()
         resume.is_verified = True
-        resume.save()
+        resume.save(update_fields=['is_verified'])
         return Response({"status": "verified"})
 
-    def destroy(self, request, *args, **kwargs):
-        if not IsSeniorTutorOrManager().has_permission(request, self):
-            return Response(status=status.HTTP_403_FORBIDDEN)
-        return super().destroy(request, *args, **kwargs)
 
 class ParentReviewViewSet(viewsets.ModelViewSet):
     serializer_class = ParentReviewSerializer
@@ -126,10 +173,10 @@ class ParentReviewViewSet(viewsets.ModelViewSet):
         return [IsAuthenticated()]
 
     def get_queryset(self):
+        qs = ParentReview.objects.none()
         auth = self.request.auth
-        if not auth:
-            qs = ParentReview.objects.none()
-        else:
+        
+        if auth:
             role = auth.get('role')
             user_id = auth.get('user_id')
             branch_id = auth.get('branch_id')
@@ -142,23 +189,25 @@ class ParentReviewViewSet(viewsets.ModelViewSet):
                     qs = ParentReview.objects.filter(student__group__tutor_id=user_id)
             elif role == 'manager':
                 qs = ParentReview.objects.filter(student__branch_id=branch_id)
-            else:
-                qs = ParentReview.objects.none()
                 
         student_crm_id = self.kwargs.get('student_crm_id')
         if student_crm_id:
             qs = qs.filter(student__student_crm_id=student_crm_id)
+            
         return qs
 
+
 class NewsViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = News.objects.all().order_by('-created_at')
+    queryset = News.objects.all()  # Ordering in Meta
     serializer_class = NewsSerializer
     permission_classes = [IsAuthenticated]
+
 
 class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Category.objects.filter(is_active=True)
     serializer_class = CategorySerializer
     permission_classes = [IsAuthenticated]
+
 
 class ModuleViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Module.objects.filter(is_active=True)

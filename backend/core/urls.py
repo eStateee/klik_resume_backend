@@ -3,7 +3,7 @@ from django.views.generic import RedirectView
 from rest_framework_simplejwt.views import TokenRefreshView
 from rest_framework.routers import SimpleRouter
 from .views import (
-    PasswordlessLoginView, GroupViewSet, StudentViewSet, 
+    PasswordlessLoginView, ProfileDetailView, GroupViewSet, StudentViewSet, 
     ResumeViewSet, ParentReviewViewSet, NewsViewSet, 
     CategoryViewSet, ModuleViewSet
 )
@@ -20,6 +20,7 @@ urlpatterns = [
     path('', RedirectView.as_view(url='/api/docs/swagger/', permanent=False), name='api-root-redirect'),
     path('auth/login/', PasswordlessLoginView.as_view(), name='login'),
     path('auth/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    path('profile/detail/', ProfileDetailView.as_view(), name='profile_detail'),
     path('reviews/<str:student_crm_id>/', ParentReviewViewSet.as_view({'get': 'list'}), name='review-list'),
     path('reviews/', ParentReviewViewSet.as_view({'post': 'create'}), name='review-create'),
     path('', include(router.urls)),
