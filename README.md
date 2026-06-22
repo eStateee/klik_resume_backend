@@ -1,9 +1,5 @@
 # Бэкенд Klik Resume
 
-## Тайминги JWT
-### 'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
-### 'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
-## Быстрый старт
 
 ### Сборка
 ```powershell
