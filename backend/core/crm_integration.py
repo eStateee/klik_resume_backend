@@ -1,14 +1,11 @@
 import requests
-import redis
 from typing import Optional, Dict, Any
 from django.conf import settings
-from app_resumes.models import TutorProfile
+from core.models import TutorProfile
+from django.core.cache import cache
 import logging
 
 logger = logging.getLogger("app_resume")
-
-# Redis connection
-redis_client = redis.Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, db=settings.REDIS_DB, decode_responses=True)
 
 
 BASE_HEADERS = {
@@ -23,8 +20,8 @@ def login_to_alfa_crm() -> Optional[str]:
     """
     Авторизация в CRM и получение токена.
     """
-    # Попробуем получить токен из Redis
-    cached_token = redis_client.get("crm_auth_token")
+    # Попробуем получить токен из Redis через кэш Django
+    cached_token = cache.get("crm_auth_token")
     if cached_token:
         return cached_token
 
@@ -45,7 +42,7 @@ def login_to_alfa_crm() -> Optional[str]:
 
             # Сохраняем токен в Redis на 1 час (3600 секунд)
             if token:
-                redis_client.setex("crm_auth_token", 3600, token)
+                cache.set("crm_auth_token", token, timeout=3600)
             return token
         else:
             return None
@@ -102,7 +99,7 @@ def clear_crm_auth_token():
     """
     Удаляет токен аутентификации CRM из Redis
     """
-    redis_client.delete("crm_auth_token")
+    cache.delete("crm_auth_token")
 
 
 def get_tutor_data_from_crm(phone: str, branch: str = None) -> Optional[Dict[str, Any]]:
@@ -260,7 +257,7 @@ def get_tutor_groups_from_crm(tutor_crm_id: str, branch: str = None) -> Optional
 
 def get_group_clients_from_crm(group_id: str, branch: str = None) -> Optional[Dict[str, Any]]:
     """
-    Get clients in a group from external CRM system using the old get_clients_in_group logic
+    Get clients in a group from external CRM system using optimized bulk request
     """
     logger.info(f"Получение клиентов группы с ID: {group_id}, филиал: {branch}")
 
@@ -274,39 +271,59 @@ def get_group_clients_from_crm(group_id: str, branch: str = None) -> Optional[Di
         logger.error("Не удалось получить токен аутентификации")
         return None
 
-    url = f"{settings.CRM_API_URL}/v2api/{branch}/cgi/index"
-    params = {"group_id": group_id}
-
     headers = {**BASE_HEADERS, "X-ALFACRM-TOKEN": token}
 
     try:
-        logger.debug(f"Отправка запроса к CRM: {url}")
-        response = make_authenticated_request(url, headers, None, params)
-        response.raise_for_status()
-        result = response.json()
+        # Шаг 1: Получаем ID всех клиентов в группе
+        cgi_url = f"{settings.CRM_API_URL}/v2api/{branch}/cgi/index"
+        logger.debug(f"Отправка запроса к CRM cgi/index: {cgi_url}")
+        # Для cgi/index обычно используется POST с JSON (data), но оставим params на случай если API так ожидает
+        cgi_response = make_authenticated_request(cgi_url, headers, data={"group_id": int(group_id)})
+        cgi_response.raise_for_status()
+        cgi_result = cgi_response.json()
 
-        customer_ids = [customer_id["customer_id"] for customer_id in result.get("items", [])]
+        customer_ids = [item["customer_id"] for item in cgi_result.get("items", [])]
 
-        # For each customer_id, get client data
-        clients_data = []
-        for customer_id in customer_ids:
-            # Note: This is recursive and might need to be optimized
-            client_data = get_client_data_from_crm(str(customer_id), branch)
+        if not customer_ids:
+            logger.info(f"Нет клиентов в группе {group_id}")
+            return []
+
+        # Шаг 2: Получаем данные всех этих клиентов одним пакетным запросом
+        customers_url = f"{settings.CRM_API_URL}/v2api/{branch}/customer/index"
+        # Передаем массив ID для массовой выборки (избавляемся от N+1)
+        customers_data = {
+            "id": customer_ids,
+            "is_study": 2, 
+            "page": 0,
+            "limit": 200 # Ставим достаточный лимит, чтобы покрыть всю группу
+        }
+        
+        logger.debug(f"Отправка запроса к CRM customer/index: {customers_url} с {len(customer_ids)} ID")
+        customers_response = make_authenticated_request(customers_url, headers, data=customers_data)
+        customers_response.raise_for_status()
+        customers_result = customers_response.json()
+        
+        clients_dict = {item["id"]: item for item in customers_result.get("items", [])}
+
+        clients_in_group = []
+        for cid in customer_ids:
+            client_data = clients_dict.get(cid)
             if client_data:
                 client_name = client_data.get("name", "Неизвестный клиент")
-                study_start_date = client_data.get("custom_datano")  # Дата начала обучения из CRM
+                study_start_date = client_data.get("custom_datano")
             else:
                 client_name = "Клиент не найден"
                 study_start_date = None
-            clients_data.append((customer_id, client_name, study_start_date))
+                
+            clients_in_group.append({
+                "customer_id": cid, 
+                "client_name": client_name, 
+                "custom_datano": study_start_date
+            })
 
-        # Create the response format
-        clients_in_group = [
-            {"customer_id": customer_id, "client_name": client_name, "custom_datano": study_start_date}
-            for customer_id, client_name, study_start_date in clients_data
-        ]
         logger.info(f"Получено {len(clients_in_group)} клиентов для группы {group_id}")
         return clients_in_group
+
     except requests.HTTPError as e:
         logger.error(f"HTTP ошибка при получении клиентов группы: {str(e)}")
         return None

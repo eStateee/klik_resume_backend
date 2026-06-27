@@ -11,7 +11,7 @@ if not SECRET_KEY_ENV and not DEBUG:
     raise RuntimeError("DJANGO_SECRET_KEY must be set in production (DEBUG=False).")
 SECRET_KEY = SECRET_KEY_ENV or 'django-insecure-q&fidfi1f+vqdpfxo9ei!me!guhn*tz)8*4*&2n#wty07a7%^2'
 ALLOWED_HOSTS = ['*']
-CSRF_TRUSTED_ORIGINS = ['http://localhost:8000', 'http://127.0.0.1:8000']
+CSRF_TRUSTED_ORIGINS = ['http://localhost:8000', 'http://127.0.0.1:8000', 'https://*.ngrok-free.dev']
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -70,6 +70,10 @@ DATABASES = {
         'PASSWORD': os.environ.get('POSTGRES_PASSWORD', 'postgres'),
         'HOST': os.environ.get('POSTGRES_HOST', 'localhost'),
         'PORT': os.environ.get('POSTGRES_PORT', '5432'),
+    },
+    'old_sqlite': {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'core' / 'db.sqlite3',
     }
 }
 
