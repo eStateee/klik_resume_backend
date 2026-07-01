@@ -54,6 +54,7 @@ class TutorProfile(AuthenticatedModelMixin, models.Model):
         Branch, on_delete=models.PROTECT, verbose_name="Филиал", related_name="tutors"
     )
     is_senior = models.BooleanField(default=False, verbose_name="Старший тьютор")
+    is_active = models.BooleanField(default=True, verbose_name="Активен")
     phone_number = models.CharField(max_length=50, unique=True, verbose_name="Уникальный телефон")
     dob = models.DateField(null=True, blank=True, verbose_name="Дата рождения")
     note = models.TextField(null=True, blank=True, verbose_name="Заметка")

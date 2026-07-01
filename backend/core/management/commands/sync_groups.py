@@ -25,9 +25,16 @@ class Command(BaseCommand):
                 crm_group_id = str(group_data.get("id"))
                 name = group_data.get("name")
                 
-                # Поля для новой структуры
+                # Извлечение teacher IDs из CRM-ответа:
+                # CRM возвращает поле `teachers` — массив объектов [{"id": 123, ...}]
+                # Фолбэк на `teacher_ids` — плоский массив [123, 456], если `teachers` пуст
+                raw_teachers = group_data.get("teachers", [])
+                if raw_teachers and isinstance(raw_teachers, list):
+                    teacher_ids = [t.get("id") for t in raw_teachers if isinstance(t, dict) and t.get("id")]
+                else:
+                    teacher_ids = group_data.get("teacher_ids", [])
+                
                 branch_ids = group_data.get("branch_ids", [])
-                teacher_ids = group_data.get("teacher_ids", [])
                 custom_aerodromnaya = group_data.get("custom_aerodromnaya", False)
                 if custom_aerodromnaya is None:
                     custom_aerodromnaya = False
@@ -47,32 +54,35 @@ class Command(BaseCommand):
                         )
                 
                 if not branch_obj:
-                    self.stdout.write(self.style.WARNING(
-                        f"ПРОПУСК группы crm_id={crm_group_id}, name=\"{name}\": не удалось определить филиал."
-                    ))
-                    skipped_count += 1
-                    continue
+                    # Используем дефолтный филиал (Минск) вместо пропуска
+                    branch_obj = Branch.objects.filter(branch_crm_id=1).first()
+                    if not branch_obj:
+                        self.stdout.write(self.style.WARNING(
+                            f"ПРОПУСК группы crm_id={crm_group_id}, name=\"{name}\": нет ни нужного, ни дефолтного филиала."
+                        ))
+                        skipped_count += 1
+                        continue
+                    logger.warning(
+                        f"sync_groups: группа {crm_group_id} ({name}) — нет филиала из CRM, привязана к Минску."
+                    )
                 
-                # Обработка преподавателя
+                # Обработка преподавателя — поиск только по tutor_crm_id среди активных
                 tutor_obj = None
-                from django.db.models import Q
-                if isinstance(teacher_ids, list):
-                    if len(teacher_ids) > 0:
-                        first_teacher_id = str(teacher_ids[0])
-                        tutor_obj = TutorProfile.objects.filter(
-                            Q(tutor_crm_id=first_teacher_id) | Q(tutor_name=first_teacher_id)
-                        ).first()
-                        
-                        if len(teacher_ids) > 1:
-                            logger.warning(
-                                f"sync_groups: Группа {crm_group_id} ({name}) имеет несколько преподавателей {teacher_ids}. "
-                                f"Привязан только первый: {first_teacher_id}."
-                            )
-                else:
-                    if teacher_ids:
-                        tutor_obj = TutorProfile.objects.filter(
-                            Q(tutor_crm_id=str(teacher_ids)) | Q(tutor_name=str(teacher_ids))
-                        ).first()
+                if isinstance(teacher_ids, list) and len(teacher_ids) > 0:
+                    first_teacher_id = str(teacher_ids[0])
+                    tutor_obj = TutorProfile.objects.filter(
+                        tutor_crm_id=first_teacher_id, is_active=True
+                    ).first()
+                    
+                    if len(teacher_ids) > 1:
+                        logger.warning(
+                            f"sync_groups: Группа {crm_group_id} ({name}) имеет несколько преподавателей {teacher_ids}. "
+                            f"Привязан только первый: {first_teacher_id}."
+                        )
+                elif teacher_ids:
+                    tutor_obj = TutorProfile.objects.filter(
+                        tutor_crm_id=str(teacher_ids), is_active=True
+                    ).first()
                         
                 # Обновление или создание группы
                 group, created = Group.objects.update_or_create(

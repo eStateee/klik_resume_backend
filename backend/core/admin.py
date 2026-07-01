@@ -20,7 +20,7 @@ class LocationAdmin(admin.ModelAdmin):
 
 @admin.register(TutorProfile)
 class TutorProfileAdmin(admin.ModelAdmin):
-    list_display = ('id', 'tutor_name', 'phone_number', 'branch', 'is_senior')
+    list_display = ('id', 'tutor_name', 'phone_number', 'branch', 'is_active','is_senior')
     list_filter = ('branch', 'is_senior')
     search_fields = ('tutor_name', 'phone_number')
 

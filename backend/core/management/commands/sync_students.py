@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime
 from django.core.management.base import BaseCommand
-from core.models import Group, Student
+from core.models import Group, Student, Branch
 from core.crm_integration import get_group_clients_from_crm
 
 logger = logging.getLogger("app_resume")
@@ -33,12 +33,24 @@ class Command(BaseCommand):
                 return
 
             synced_student_ids = set()
+            created_count = 0
+            updated_count = 0
+            api_failed = False
 
             for group in groups:
                 branch_crm_id = str(group.branch.branch_crm_id)
 
-                self.stdout.write(f"Syncing students for group {group.crm_group_id} (Branch: {branch_crm_id})...")
+                self.stdout.write(f"ADD Получение клиентов для группы с CRM ID {group.crm_group_id}, филиал: {branch_crm_id}...")
                 group_clients = get_group_clients_from_crm(group.crm_group_id, branch_crm_id)
+
+                # Safety-check: если CRM вернул None, прерываем
+                if group_clients is None:
+                    api_failed = True
+                    self.stdout.write(self.style.ERROR(
+                        f"Ошибка: не удалось получить клиентов для группы {group.crm_group_id}."
+                    ))
+                    logger.error(f"sync_students: get_group_clients_from_crm вернул None для группы {group.crm_group_id}. Прерывание.")
+                    break
 
                 if group_clients:
                     for client in group_clients:
@@ -49,18 +61,42 @@ class Command(BaseCommand):
                             study_start_date_str = client.get("custom_datano")
                             study_start_date = parse_date(study_start_date_str)
                             
+                            # Определяем реальный филиал студента из CRM
+                            student_branch = group.branch
+                            branch_ids = client.get("branch_ids", [])
+                            if branch_ids and len(branch_ids) > 0:
+                                try:
+                                    # Пытаемся найти первый филиал из массива
+                                    crm_b_id = int(branch_ids[0])
+                                    found_branch = Branch.objects.filter(branch_crm_id=crm_b_id).first()
+                                    if found_branch:
+                                        student_branch = found_branch
+                                except (ValueError, TypeError):
+                                    pass
+                            
                             student, created = Student.objects.update_or_create(
                                 student_crm_id=customer_id, 
                                 defaults={
                                     "student_name": client_name, 
                                     "group": group,
-                                    "branch": group.branch,
+                                    "branch": student_branch,
                                     "study_start_date": study_start_date
                                 }
                             )
                             synced_student_ids.add(customer_id)
+                            if created:
+                                created_count += 1
+                            else:
+                                updated_count += 1
 
-            self.stdout.write(self.style.SUCCESS(f"Successfully synchronized {len(synced_student_ids)} unique students"))
+            if api_failed:
+                self.stdout.write(self.style.ERROR("Синхронизация прервана из-за ошибок API."))
+                return
+
+            self.stdout.write(self.style.SUCCESS(
+                f"Синхронизация завершена: {len(synced_student_ids)} уникальных студентов. "
+                f"Создано: {created_count}, Обновлено: {updated_count}"
+            ))
         except Exception as e:
             self.stdout.write(self.style.ERROR(f"An error occurred while synchronizing students: {str(e)}"))
             logger.exception("sync_students error")

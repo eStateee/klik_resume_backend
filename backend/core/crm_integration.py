@@ -257,7 +257,7 @@ def get_tutor_groups_from_crm(tutor_crm_id: str, branch: str = None) -> Optional
 
 def get_group_clients_from_crm(group_id: str, branch: str = None) -> Optional[Dict[str, Any]]:
     """
-    Get clients in a group from external CRM system using optimized bulk request
+    Get clients in a group from external CRM system using optimized bulk request with pagination
     """
     logger.info(f"Получение клиентов группы с ID: {group_id}, филиал: {branch}")
 
@@ -265,7 +265,6 @@ def get_group_clients_from_crm(group_id: str, branch: str = None) -> Optional[Di
         logger.error("Отсутствует филиал или API ключ CRM")
         return None
 
-    # Get token for authentication
     token = login_to_alfa_crm()
     if not token:
         logger.error("Не удалось получить токен аутентификации")
@@ -274,36 +273,54 @@ def get_group_clients_from_crm(group_id: str, branch: str = None) -> Optional[Di
     headers = {**BASE_HEADERS, "X-ALFACRM-TOKEN": token}
 
     try:
-        # Шаг 1: Получаем ID всех клиентов в группе
+        # Шаг 1: Получаем ID всех клиентов в группе с пагинацией
+        # cgi/index принимает group_id ТОЛЬКО как query-параметр, не в теле запроса
         cgi_url = f"{settings.CRM_API_URL}/v2api/{branch}/cgi/index"
-        logger.debug(f"Отправка запроса к CRM cgi/index: {cgi_url}")
-        # Для cgi/index обычно используется POST с JSON (data), но оставим params на случай если API так ожидает
-        cgi_response = make_authenticated_request(cgi_url, headers, data={"group_id": int(group_id)})
-        cgi_response.raise_for_status()
-        cgi_result = cgi_response.json()
+        customer_ids = []
+        page = 0
 
-        customer_ids = [item["customer_id"] for item in cgi_result.get("items", [])]
+        while True:
+            logger.debug(f"Запрос cgi/index: страница {page}, группа {group_id}")
+            cgi_response = make_authenticated_request(
+                cgi_url, headers, data=None,
+                params={"group_id": group_id, "page": page}
+            )
+            cgi_response.raise_for_status()
+            cgi_result = cgi_response.json()
+
+            items = cgi_result.get("items", [])
+            if not items:
+                break
+
+            customer_ids.extend([item["customer_id"] for item in items])
+
+            total = cgi_result.get("total", 0)
+            page += 1
+            # Остановиться, если получили все записи
+            if total > 0 and len(customer_ids) >= total:
+                break
 
         if not customer_ids:
             logger.info(f"Нет клиентов в группе {group_id}")
             return []
 
-        # Шаг 2: Получаем данные всех этих клиентов одним пакетным запросом
+        # Шаг 2: Получаем данные всех клиентов с пагинацией (лимит API = 200)
         customers_url = f"{settings.CRM_API_URL}/v2api/{branch}/customer/index"
-        # Передаем массив ID для массовой выборки (избавляемся от N+1)
-        customers_data = {
-            "id": customer_ids,
-            "is_study": 2, 
-            "page": 0,
-            "limit": 200 # Ставим достаточный лимит, чтобы покрыть всю группу
-        }
-        
-        logger.debug(f"Отправка запроса к CRM customer/index: {customers_url} с {len(customer_ids)} ID")
-        customers_response = make_authenticated_request(customers_url, headers, data=customers_data)
-        customers_response.raise_for_status()
-        customers_result = customers_response.json()
-        
-        clients_dict = {item["id"]: item for item in customers_result.get("items", [])}
+        clients_dict = {}
+        CHUNK_SIZE = 200
+
+        # Запрашиваем по 200 клиентов за раз, чтобы не превысить лимит API
+        for i in range(0, len(customer_ids), CHUNK_SIZE):
+            chunk = customer_ids[i:i + CHUNK_SIZE]
+            customers_data = {"id": chunk, "is_study": 2, "page": 0, "limit": CHUNK_SIZE}
+
+            logger.debug(f"Запрос customer/index: {len(chunk)} клиентов (chunk {i // CHUNK_SIZE + 1})")
+            customers_response = make_authenticated_request(customers_url, headers, data=customers_data)
+            customers_response.raise_for_status()
+            customers_result = customers_response.json()
+
+            for item in customers_result.get("items", []):
+                clients_dict[item["id"]] = item
 
         clients_in_group = []
         for cid in customer_ids:
@@ -311,14 +328,17 @@ def get_group_clients_from_crm(group_id: str, branch: str = None) -> Optional[Di
             if client_data:
                 client_name = client_data.get("name", "Неизвестный клиент")
                 study_start_date = client_data.get("custom_datano")
+                branch_ids = client_data.get("branch_ids", [])
             else:
                 client_name = "Клиент не найден"
                 study_start_date = None
-                
+                branch_ids = []
+
             clients_in_group.append({
-                "customer_id": cid, 
-                "client_name": client_name, 
-                "custom_datano": study_start_date
+                "customer_id": cid,
+                "client_name": client_name,
+                "custom_datano": study_start_date,
+                "branch_ids": branch_ids
             })
 
         logger.info(f"Получено {len(clients_in_group)} клиентов для группы {group_id}")
@@ -358,11 +378,11 @@ def get_all_groups() -> Optional[Dict[str, Any]]:
 
     for branch in branches:
         page = 0
+        branch_items = []
 
         while True:
-            # Construct the URL for the current branch and page
             url = f"{settings.CRM_API_URL}/v2api/{branch}/group/index"
-            data = {"page": page, "limit": 50}  # Assuming API supports pagination
+            data = {"page": page, "limit": 50}
 
             try:
                 logger.debug(f"Отправка запроса к CRM: {url}")
@@ -371,19 +391,17 @@ def get_all_groups() -> Optional[Dict[str, Any]]:
                 result = response.json()
 
                 items = result.get("items", [])
-                current_page_count = len(items)
-                total = result.get("total", 0)
-
-                if current_page_count == 0:
+                if not items:
                     logger.info(f"Нет больше данных для филиала {branch}, страница {page}")
-                    break  # No more data
+                    break
 
-                all_items.extend(items)
+                branch_items.extend(items)
+                total = result.get("total", 0)
                 page += 1
-                logger.debug(f"Получено {current_page_count} групп для филиала {branch}, страница {page}")
+                logger.debug(f"Получено {len(items)} групп для филиала {branch}, страница {page}. Итого по филиалу: {len(branch_items)}/{total}")
 
-                # Additional protection: if we've collected all records
-                if len(all_items) >= total > 0:
+                # Остановиться, если получили все записи по текущему филиалу
+                if total > 0 and len(branch_items) >= total:
                     logger.info(f"Получены все {total} групп для филиала {branch}")
                     break
 
@@ -397,5 +415,78 @@ def get_all_groups() -> Optional[Dict[str, Any]]:
                 logger.error(f"Неизвестная ошибка при получении групп для филиала {branch}: {str(e)}")
                 break
 
+        all_items.extend(branch_items)
+
     logger.info(f"Всего получено {len(all_items)} групп из всех филиалов")
     return all_items
+
+
+def get_all_tutors_from_crm(branches: list = None) -> Optional[list]:
+    """
+    Get all tutors from external CRM system for given branches.
+    """
+    logger.info("Получение всех тьюторов из CRM")
+
+    if not settings.CRM_API_KEY:
+        logger.error("Отсутствует API ключ CRM")
+        return None
+
+    # Get token for authentication
+    token = login_to_alfa_crm()
+    if not token:
+        logger.error("Не удалось получить токен аутентификации")
+        return None
+
+    if branches:
+        branch_ids = [b.branch_crm_id if hasattr(b, 'branch_crm_id') else b for b in branches]
+    else:
+        branch_ids = [1, 2, 3, 4]
+
+    all_tutors = []
+    headers = {**BASE_HEADERS, "X-ALFACRM-TOKEN": token}
+
+    for branch in branch_ids:
+        page = 0
+        branch_items = []
+
+        while True:
+            url = f"{settings.CRM_API_URL}/v2api/{branch}/teacher/index"
+            data = {"page": page, "limit": 50}
+
+            try:
+                logger.debug(f"Отправка запроса к CRM: {url} (page {page})")
+                response = make_authenticated_request(url, headers, data)
+                response.raise_for_status()
+                result = response.json()
+
+                items = result.get("items", [])
+                if not items:
+                    logger.info(f"Нет больше данных для филиала {branch}, страница {page}")
+                    break
+
+                # Прикрепляем ID филиала, из которого мы получили этого тьютора
+                for item in items:
+                    item['fetched_branch_crm_id'] = branch
+                
+                branch_items.extend(items)
+                total = result.get("total", 0)
+                page += 1
+                
+                if total > 0 and len(branch_items) >= total:
+                    logger.info(f"Получены все {total} тьюторов для филиала {branch}")
+                    break
+
+            except requests.HTTPError as e:
+                logger.error(f"HTTP ошибка при получении тьюторов для филиала {branch}: {str(e)}")
+                break
+            except requests.RequestException as e:
+                logger.error(f"Ошибка запроса при получении тьюторов для филиала {branch}: {str(e)}")
+                break
+            except Exception as e:
+                logger.error(f"Неизвестная ошибка при получении тьюторов для филиала {branch}: {str(e)}")
+                break
+
+        all_tutors.extend(branch_items)
+
+    logger.info(f"Всего получено {len(all_tutors)} тьюторов из всех филиалов")
+    return all_tutors

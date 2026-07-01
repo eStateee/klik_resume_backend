@@ -3,6 +3,7 @@ import json
 from datetime import datetime
 from django.core.management.base import BaseCommand
 from django.db import connections, transaction
+from django.db.models import Q
 from core.models import Branch, Location, TutorProfile, Group, Student, Resume, ParentReview
 
 logger = logging.getLogger("app_resume")
@@ -23,12 +24,12 @@ class Command(BaseCommand):
                 cursor.execute("SELECT DISTINCT branch FROM app_resumes_tutorprofile WHERE branch IS NOT NULL")
                 old_branches = cursor.fetchall()
 
-                # Предварительно создадим каноничные филиалы
+                # Предварительно создаем филиалы
                 canonical_branches = {
                     1: Branch.objects.get_or_create(branch_crm_id=1, defaults={'name': 'Минск'})[0],
                     2: Branch.objects.get_or_create(branch_crm_id=2, defaults={'name': 'Барановичи'})[0],
-                    3: Branch.objects.get_or_create(branch_crm_id=3, defaults={'name': 'Брест'})[0],
-                    4: Branch.objects.get_or_create(branch_crm_id=4, defaults={'name': 'Гродно'})[0],
+                    3: Branch.objects.get_or_create(branch_crm_id=3, defaults={'name': 'Борисов'})[0],
+                    4: Branch.objects.get_or_create(branch_crm_id=4, defaults={'name': 'Новополоцк'})[0],
                 }
                 
                 for crm_id, b in canonical_branches.items():
@@ -38,13 +39,13 @@ class Command(BaseCommand):
                 for row in old_branches:
                     branch_name = row[0]
                     bn_lower = str(branch_name).lower()
-                    if "минск" in bn_lower or "minsk" in bn_lower:
+                    if "минск" in bn_lower or "minsk" in bn_lower or str(branch_name) == "1":
                         branch_map[branch_name] = canonical_branches[1]
-                    elif "барановичи" in bn_lower:
+                    elif "барановичи" in bn_lower or str(branch_name) == "2":
                         branch_map[branch_name] = canonical_branches[2]
-                    elif "брест" in bn_lower:
+                    elif "брест" in bn_lower or str(branch_name) == "3":
                         branch_map[branch_name] = canonical_branches[3]
-                    elif "гродно" in bn_lower:
+                    elif "гродно" in bn_lower or str(branch_name) == "4":
                         branch_map[branch_name] = canonical_branches[4]
                     else:
                         branch_map[branch_name] = canonical_branches[1]
@@ -105,7 +106,6 @@ class Command(BaseCommand):
                     # Пытаемся найти тьютора
                     tutor_obj = None
                     if teacher_ids_raw:
-                        from django.db.models import Q
                         try:
                             t_ids = json.loads(teacher_ids_raw)
                             if isinstance(t_ids, list) and len(t_ids) > 0:
@@ -120,10 +120,28 @@ class Command(BaseCommand):
                             Q(tutor_crm_id=t_id) | Q(tutor_name=t_id)
                         ).first()
                             
+                    # Определяем филиал группы из branch_ids_raw
+                    group_branch = default_branch
+                    if branch_ids_raw:
+                        try:
+                            b_ids = json.loads(branch_ids_raw)
+                            if isinstance(b_ids, list) and len(b_ids) > 0:
+                                b_id = int(b_ids[0])
+                                group_branch = canonical_branches.get(b_id, default_branch)
+                            else:
+                                b_id = int(b_ids)
+                                group_branch = canonical_branches.get(b_id, default_branch)
+                        except (json.JSONDecodeError, ValueError, TypeError):
+                            try:
+                                b_id = int(branch_ids_raw)
+                                group_branch = canonical_branches.get(b_id, default_branch)
+                            except ValueError:
+                                pass
+
                     group, created = Group.objects.update_or_create(
                         crm_group_id=str(crm_id),
                         defaults={
-                            'branch': default_branch, # Пока ставим дефолтный, если нет branch_ids
+                            'branch': group_branch,
                             'tutor': tutor_obj,
                             'name': name or f"Группа {crm_id}",
                             'custom_aerodromnaya': custom_aero == '1' or custom_aero is True or str(custom_aero).lower() == 'true'
