@@ -14,8 +14,8 @@ class BranchAdmin(admin.ModelAdmin):
 
 @admin.register(Location)
 class LocationAdmin(admin.ModelAdmin):
-    list_display = ('id', 'name', 'branch')
-    list_filter = ('branch',)
+    list_display = ('id', 'location_crm_id', 'name', 'branch', 'is_active')
+    list_filter = ('branch', 'is_active')
 
 
 @admin.register(TutorProfile)

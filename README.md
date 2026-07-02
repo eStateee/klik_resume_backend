@@ -7,9 +7,11 @@ Invoke-RestMethod -Uri http://localhost:8000/api/auth/login/ -Method POST -Heade
 docker compose down -v # -v удаление и очистка БД!!!!!
 docker compose down # Просто остановить 
 docker compose up -d --build
+docker compose exec backend python manage.py createsuperuser # суперюзер
 docker compose exec backend python manage.py migrate_from_sqlite
 docker compose exec backend python manage.py sync_tutors
 docker compose exec backend python manage.py sync_groups
 docker compose exec backend python manage.py sync_students
+docker compose exec backend python manage.py sync_locations
 docker compose exec backend python manage.py sync_groups_remove
 docker compose exec backend python manage.py sync_students_remove

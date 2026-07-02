@@ -4,7 +4,7 @@ from datetime import datetime
 from django.core.management.base import BaseCommand
 from django.db import connections, transaction
 from django.db.models import Q
-from core.models import Branch, Location, TutorProfile, Group, Student, Resume, ParentReview
+from core.models import Branch, TutorProfile, Group, Student, Resume, ParentReview
 
 logger = logging.getLogger("app_resume")
 
@@ -19,8 +19,8 @@ class Command(BaseCommand):
             with transaction.atomic():
                 cursor = connections['old_sqlite'].cursor()
 
-                # 1. Миграция филиалов (Branch) и локаций (Location)
-                self.stdout.write("Шаг 1: Восстановление филиалов и локаций")
+                # 1. Миграция филиалов (Branch)
+                self.stdout.write("Шаг 1: Восстановление филиалов")
                 cursor.execute("SELECT DISTINCT branch FROM app_resumes_tutorprofile WHERE branch IS NOT NULL")
                 old_branches = cursor.fetchall()
 
@@ -32,9 +32,6 @@ class Command(BaseCommand):
                     4: Branch.objects.get_or_create(branch_crm_id=4, defaults={'name': 'Новополоцк'})[0],
                 }
                 
-                for crm_id, b in canonical_branches.items():
-                    Location.objects.get_or_create(name=f"Основная локация ({b.name})", branch=b)
-
                 branch_map = {}
                 for row in old_branches:
                     branch_name = row[0]
@@ -43,9 +40,9 @@ class Command(BaseCommand):
                         branch_map[branch_name] = canonical_branches[1]
                     elif "барановичи" in bn_lower or str(branch_name) == "2":
                         branch_map[branch_name] = canonical_branches[2]
-                    elif "брест" in bn_lower or str(branch_name) == "3":
+                    elif "борисов" in bn_lower or str(branch_name) == "3":
                         branch_map[branch_name] = canonical_branches[3]
-                    elif "гродно" in bn_lower or str(branch_name) == "4":
+                    elif "новополоцк" in bn_lower or str(branch_name) == "4":
                         branch_map[branch_name] = canonical_branches[4]
                     else:
                         branch_map[branch_name] = canonical_branches[1]

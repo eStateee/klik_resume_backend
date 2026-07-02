@@ -15,10 +15,14 @@ class Branch(models.Model):
 
 
 class Location(models.Model):
+    location_crm_id = models.IntegerField(
+        unique=True, null=True, blank=True, verbose_name="ID локации в CRM"
+    )
     name = models.CharField(max_length=255, verbose_name="Название локации")
     branch = models.ForeignKey(
         Branch, on_delete=models.CASCADE, verbose_name="Филиал", related_name="locations"
     )
+    is_active = models.BooleanField(default=True, verbose_name="Активна")
 
     def __str__(self):
         return f"{self.name} ({self.branch.name})"

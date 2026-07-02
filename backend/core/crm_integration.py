@@ -490,3 +490,57 @@ def get_all_tutors_from_crm(branches: list = None) -> Optional[list]:
 
     logger.info(f"Всего получено {len(all_tutors)} тьюторов из всех филиалов")
     return all_tutors
+
+
+def get_all_locations_from_crm(branches: list = None) -> Optional[list]:
+    """
+    Получает все локации из CRM для указанных филиалов.
+    Эндпоинт: POST /v2api/{branch}/location/index с пустым телом запроса.
+    Формат ответа CRM:
+        {"total": N, "count": N, "page": 0,
+         "items": [{"id": 1, "branch_id": 1, "name": "...", "is_active": 1, "weight": 0}, ...]}
+    """
+    logger.info("Получение всех локаций из CRM")
+
+    if not settings.CRM_API_KEY:
+        logger.error("Отсутствует API ключ CRM")
+        return None
+
+    token = login_to_alfa_crm()
+    if not token:
+        logger.error("Не удалось получить токен аутентификации")
+        return None
+
+    if branches:
+        branch_ids = [b.branch_crm_id if hasattr(b, 'branch_crm_id') else b for b in branches]
+    else:
+        branch_ids = [1, 2, 3, 4]
+
+    all_locations = []
+    headers = {**BASE_HEADERS, "X-ALFACRM-TOKEN": token}
+
+    for branch in branch_ids:
+        url = f"{settings.CRM_API_URL}/v2api/{branch}/location/index"
+
+        try:
+            logger.debug(f"Отправка запроса к CRM: {url}")
+            response = make_authenticated_request(url, headers, data={})
+            response.raise_for_status()
+            result = response.json()
+
+            items = result.get("items", [])
+            for item in items:
+                item['fetched_branch_crm_id'] = branch
+
+            all_locations.extend(items)
+            logger.info(f"Получено {len(items)} локаций для филиала {branch}")
+
+        except requests.HTTPError as e:
+            logger.error(f"HTTP ошибка при получении локаций для филиала {branch}: {str(e)}")
+        except requests.RequestException as e:
+            logger.error(f"Ошибка запроса при получении локаций для филиала {branch}: {str(e)}")
+        except Exception as e:
+            logger.error(f"Неизвестная ошибка при получении локаций для филиала {branch}: {str(e)}")
+
+    logger.info(f"Всего получено {len(all_locations)} локаций из всех филиалов")
+    return all_locations
