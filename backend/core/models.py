@@ -46,6 +46,7 @@ class AuthenticatedModelMixin:
 
     @property
     def is_active(self):
+        """По умолчанию пользователь активен. TutorProfile переопределяет через поле БД."""
         return True
 
 

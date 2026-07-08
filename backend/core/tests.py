@@ -96,3 +96,64 @@ class AuthenticationTestCase(TestCase):
         self.client.credentials()
         response = self.client.get("/api/groups/")
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+class InactiveTutorTestCase(TestCase):
+    """Тесты блокировки деактивированных тьюторов."""
+
+    def setUp(self):
+        self.branch = Branch.objects.create(name="Minsk Inactive", branch_crm_id=100)
+        self.tutor = TutorProfile.objects.create(
+            tutor_name="Inactive Tutor",
+            phone_number="375297778899",
+            branch=self.branch,
+            is_senior=False,
+            is_active=True,
+        )
+        self.client = APIClient()
+
+    def test_inactive_tutor_authenticate_returns_none(self):
+        """authenticate() не возвращает деактивированного тьютора."""
+        self.tutor.is_active = False
+        self.tutor.save()
+
+        user = authenticate(phone_number="375297778899")
+        self.assertIsNone(user)
+
+    def test_inactive_tutor_login_rejected(self):
+        """POST /api/auth/login/ возвращает 400 для деактивированного тьютора."""
+        self.tutor.is_active = False
+        self.tutor.save()
+
+        response = self.client.post("/api/auth/login/", {"phone_number": "375297778899"})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_inactive_tutor_existing_token_rejected(self):
+        """Токен, выданный до деактивации, перестаёт работать после is_active=False."""
+        # Получаем токен пока тьютор ещё активен
+        response = self.client.post("/api/auth/login/", {"phone_number": "375297778899"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        access_token = response.data["access"]
+
+        # Деактивируем тьютора
+        self.tutor.is_active = False
+        self.tutor.save()
+
+        # Токен должен перестать работать
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access_token}")
+        response = self.client.get("/api/groups/")
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_reactivated_tutor_can_login(self):
+        """После реактивации тьютор снова может авторизоваться."""
+        self.tutor.is_active = False
+        self.tutor.save()
+        self.assertIsNone(authenticate(phone_number="375297778899"))
+
+        # Реактивация
+        self.tutor.is_active = True
+        self.tutor.save()
+
+        user = authenticate(phone_number="375297778899")
+        self.assertIsNotNone(user)
+        self.assertTrue(user.is_active)

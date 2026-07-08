@@ -51,6 +51,11 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         user = authenticate(request=self.context.get("request"), phone_number=phone_number)
 
         if user is None:
+            # Различаем «не найден» и «деактивирован» для корректного UX
+            if TutorProfile.objects.filter(phone_number=phone_number, is_active=False).exists():
+                raise serializers.ValidationError(
+                    {"phone_number": "Ваш аккаунт деактивирован. Обратитесь к администратору."}
+                )
             raise serializers.ValidationError(
                 {"phone_number": "Пользователь с таким номером телефона не найден."}
             )

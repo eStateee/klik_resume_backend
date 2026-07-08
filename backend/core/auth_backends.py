@@ -41,9 +41,9 @@ class PasswordlessAuthBackend(BaseBackend):
         except Manager.DoesNotExist:
             pass
 
-        # Если не найден — ищем тьютора
+        # Если не найден — ищем тьютора (только активного)
         try:
-            return TutorProfile.objects.get(phone_number=phone_number)
+            return TutorProfile.objects.get(phone_number=phone_number, is_active=True)
         except TutorProfile.DoesNotExist:
             return None
 
@@ -57,12 +57,17 @@ class PasswordlessAuthBackend(BaseBackend):
 
         if model_class is not None:
             try:
-                return model_class.objects.get(pk=pk)
+                user = model_class.objects.get(pk=pk)
             except model_class.DoesNotExist:
                 logger.error(
                     "get_user: %s с pk=%s не найден", model_class.__name__, pk
                 )
                 return None
+            # Блокируем неактивных тьюторов
+            if isinstance(user, TutorProfile) and not user.is_active:
+                logger.warning("get_user: тьютор pk=%s деактивирован", pk)
+                return None
+            return user
 
         # Fallback для старых токенов без префикса (целочисленный user_id)
         # Порядок: сначала Manager, потом TutorProfile
@@ -77,7 +82,11 @@ class PasswordlessAuthBackend(BaseBackend):
         except Manager.DoesNotExist:
             pass
         try:
-            return TutorProfile.objects.get(pk=pk_int)
+            tutor = TutorProfile.objects.get(pk=pk_int)
         except TutorProfile.DoesNotExist:
             logger.warning("get_user: пользователь с pk=%s не найден ни в одной модели", pk_int)
             return None
+        if not tutor.is_active:
+            logger.warning("get_user: тьютор pk=%s деактивирован (legacy-токен)", pk_int)
+            return None
+        return tutor

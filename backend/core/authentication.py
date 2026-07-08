@@ -41,12 +41,18 @@ class CustomJWTAuthentication(JWTAuthentication):
 
         if role == "tutor":
             try:
-                return TutorProfile.objects.get(id=user_id)
+                tutor = TutorProfile.objects.get(id=user_id)
             except TutorProfile.DoesNotExist:
                 logger.error("CustomJWTAuthentication: TutorProfile id=%s не найден", user_id)
                 raise AuthenticationFailed(
                     "Тьютор не найден", code="user_not_found"
                 )
+            if not tutor.is_active:
+                logger.warning("CustomJWTAuthentication: тьютор id=%s деактивирован", user_id)
+                raise AuthenticationFailed(
+                    "Ваш аккаунт деактивирован", code="user_inactive"
+                )
+            return tutor
 
         # Fallback для суперпользователей Django Admin (без кастомной роли)
         try:
