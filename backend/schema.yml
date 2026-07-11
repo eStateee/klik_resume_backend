@@ -58,11 +58,11 @@ paths:
               schema:
                 $ref: '#/components/schemas/TokenRefresh'
           description: ''
-  /api/clients/:
+  /api/categories/:
     get:
-      operationId: clients_list
+      operationId: categories_list
       tags:
-      - clients
+      - categories
       security:
       - jwtAuth: []
       responses:
@@ -72,7 +72,63 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/Student'
+                  $ref: '#/components/schemas/Category'
+          description: ''
+  /api/categories/{id}/:
+    get:
+      operationId: categories_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this Категория.
+        required: true
+      tags:
+      - categories
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+          description: ''
+  /api/clients/:
+    get:
+      operationId: clients_list
+      description: |-
+        Возвращает список студентов
+
+        **Правила доступа:**
+        - **Старший тьютор / Старший менеджер:** видит ВСЕХ студентов.
+        - **Менеджер:** видит студентов только своего филиала.
+        - **Тьютор:** видит только студентов своих групп.
+      summary: Получить список студентов
+      parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: size
+        required: false
+        in: query
+        description: Number of results to return per page (default is 50, max is 100).
+        schema:
+          type: integer
+      tags:
+      - clients
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedStudentList'
           description: ''
   /api/clients/{id}/:
     get:
@@ -82,7 +138,7 @@ paths:
         name: id
         schema:
           type: integer
-        description: A unique integer value identifying this student.
+        description: A unique integer value identifying this Студент.
         required: true
       tags:
       - clients
@@ -112,6 +168,27 @@ paths:
   /api/groups/:
     get:
       operationId: groups_list
+      description: |-
+        Возвращает список групп
+
+        **Правила доступа:**
+        - **Старший тьютор / Старший менеджер:** видит ВСЕ группы.
+        - **Менеджер:** видит группы только своего филиала.
+        - **Тьютор:** видит только свои группы.
+      summary: Получить список групп
+      parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: size
+        required: false
+        in: query
+        description: Number of results to return per page (default is 50, max is 100).
+        schema:
+          type: integer
       tags:
       - groups
       security:
@@ -121,9 +198,7 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Group'
+                $ref: '#/components/schemas/PaginatedGroupList'
           description: ''
   /api/groups/{id}/:
     get:
@@ -133,7 +208,7 @@ paths:
         name: id
         schema:
           type: integer
-        description: A unique integer value identifying this group.
+        description: A unique integer value identifying this Группа.
         required: true
       tags:
       - groups
@@ -154,7 +229,7 @@ paths:
         name: id
         schema:
           type: integer
-        description: A unique integer value identifying this group.
+        description: A unique integer value identifying this Группа.
         required: true
       tags:
       - groups
@@ -167,11 +242,11 @@ paths:
               schema:
                 $ref: '#/components/schemas/Group'
           description: ''
-  /api/resumes/:
+  /api/modules/:
     get:
-      operationId: resumes_list
+      operationId: modules_list
       tags:
-      - resumes
+      - modules
       security:
       - jwtAuth: []
       responses:
@@ -181,7 +256,112 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/Resume'
+                  $ref: '#/components/schemas/Module'
+          description: ''
+  /api/modules/{id}/:
+    get:
+      operationId: modules_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this Модуль.
+        required: true
+      tags:
+      - modules
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Module'
+          description: ''
+  /api/news/:
+    get:
+      operationId: news_list
+      tags:
+      - news
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/News'
+          description: ''
+  /api/news/{id}/:
+    get:
+      operationId: news_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this Новость.
+        required: true
+      tags:
+      - news
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/News'
+          description: ''
+  /api/profile/detail/:
+    get:
+      operationId: profile_detail_retrieve
+      description: Информация о текущем пользователе (зависит от роли — Manager или
+        TutorProfile).
+      tags:
+      - profile
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/resumes/:
+    get:
+      operationId: resumes_list
+      description: |-
+        Возвращает список резюме
+
+        **Правила доступа:**
+        - **Старший тьютор / Старший менеджер:** видит ВСЕ резюме.
+        - **Менеджер:** видит резюме только студентов своего филиала.
+        - **Тьютор:** видит резюме только студентов своих групп.
+      summary: Получить список резюме
+      parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: size
+        required: false
+        in: query
+        description: Number of results to return per page (default is 50, max is 100).
+        schema:
+          type: integer
+      tags:
+      - resumes
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedResumeList'
           description: ''
     post:
       operationId: resumes_create
@@ -216,7 +396,7 @@ paths:
         name: id
         schema:
           type: integer
-        description: A unique integer value identifying this resume.
+        description: A unique integer value identifying this Резюме.
         required: true
       tags:
       - resumes
@@ -236,7 +416,7 @@ paths:
         name: id
         schema:
           type: integer
-        description: A unique integer value identifying this resume.
+        description: A unique integer value identifying this Резюме.
         required: true
       tags:
       - resumes
@@ -268,7 +448,7 @@ paths:
         name: id
         schema:
           type: integer
-        description: A unique integer value identifying this resume.
+        description: A unique integer value identifying this Резюме.
         required: true
       tags:
       - resumes
@@ -299,7 +479,7 @@ paths:
         name: id
         schema:
           type: integer
-        description: A unique integer value identifying this resume.
+        description: A unique integer value identifying this Резюме.
         required: true
       tags:
       - resumes
@@ -316,7 +496,7 @@ paths:
         name: id
         schema:
           type: integer
-        description: A unique integer value identifying this resume.
+        description: A unique integer value identifying this Резюме.
         required: true
       tags:
       - resumes
@@ -384,7 +564,27 @@ paths:
   /api/reviews/{student_crm_id}/:
     get:
       operationId: reviews_list
+      description: |-
+        Возвращает список отзывов
+
+        **Правила доступа:**
+        - **Старший тьютор / Старший менеджер:** видит ВСЕ отзывы.
+        - **Менеджер:** видит отзывы только студентов своего филиала.
+        - **Тьютор:** видит отзывы только студентов своих групп.
+      summary: Получить список отзывов родителей
       parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: size
+        required: false
+        in: query
+        description: Number of results to return per page (default is 50, max is 100).
+        schema:
+          type: integer
       - in: path
         name: student_crm_id
         schema:
@@ -399,12 +599,31 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/ParentReview'
+                $ref: '#/components/schemas/PaginatedParentReviewList'
           description: ''
 components:
   schemas:
+    Category:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          title: Название категории
+          maxLength: 255
+        is_active:
+          type: boolean
+          title: Активна
+        subcategories:
+          type: array
+          items: {}
+          readOnly: true
+      required:
+      - id
+      - name
+      - subcategories
     CustomTokenObtainPair:
       type: object
       properties:
@@ -444,11 +663,168 @@ components:
           type: integer
           nullable: true
           title: Тьютор
+        total_students:
+          type: integer
+          readOnly: true
+        resumes_written_count:
+          type: integer
+          readOnly: true
+        resumes_verified_count:
+          type: integer
+          readOnly: true
       required:
       - branch
       - crm_group_id
       - id
       - name
+      - resumes_verified_count
+      - resumes_written_count
+      - total_students
+    Module:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          title: Название модуля
+          maxLength: 255
+        validity_period:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          title: Период действия (дни)
+        is_active:
+          type: boolean
+          title: Активен
+        is_accessible:
+          type: boolean
+          readOnly: true
+        lessons:
+          type: array
+          items: {}
+          readOnly: true
+      required:
+      - id
+      - is_accessible
+      - lessons
+      - name
+    News:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        title:
+          type: string
+          title: Заголовок
+          maxLength: 255
+        content:
+          type: string
+          title: Контент
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+          title: Создано
+      required:
+      - content
+      - created_at
+      - id
+      - title
+    PaginatedGroupList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Group'
+    PaginatedParentReviewList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/ParentReview'
+    PaginatedResumeList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Resume'
+    PaginatedStudentList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Student'
     ParentReview:
       type: object
       properties:

@@ -5,6 +5,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.db.models import Count, Q
+from drf_spectacular.utils import extend_schema
 
 from .serializers import CustomTokenObtainPairSerializer
 from .models import Group, Student, Resume, ParentReview, News, Category, Module, Manager, TutorProfile
@@ -14,6 +15,7 @@ from .serializers import (
     ModuleSerializer
 )
 from .permissions import IsTutor, IsManager, IsSeniorTutorOrManager
+from .pagination import StandardResultsSetPagination
 
 
 class PasswordlessLoginView(TokenObtainPairView):
@@ -59,6 +61,7 @@ class ProfileDetailView(APIView):
 class GroupViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = GroupSerializer
     permission_classes = [IsAuthenticated]
+    pagination_class = StandardResultsSetPagination
 
     def get_queryset(self):
         auth = self.request.auth
@@ -72,13 +75,11 @@ class GroupViewSet(viewsets.ReadOnlyModelViewSet):
         
         qs = Group.objects.none()
         
-        if role == 'tutor':
-            if is_senior:
-                qs = Group.objects.filter(branch_id=branch_id)
-            else:
-                qs = Group.objects.filter(tutor_id=user_id)
+        if is_senior:
+            qs = Group.objects.all()
+        elif role == 'tutor':
+            qs = Group.objects.filter(tutor_id=user_id)
         elif role == 'manager':
-            # Менеджеры могут видеть группы в рамках своего филиала
             qs = Group.objects.filter(branch_id=branch_id)
         
         return qs.annotate(
@@ -86,6 +87,19 @@ class GroupViewSet(viewsets.ReadOnlyModelViewSet):
             resumes_written_count=Count('students', filter=Q(students__is_added=True), distinct=True),
             resumes_verified_count=Count('students', filter=Q(students__resumes__is_verified=True), distinct=True)
         )
+
+    @extend_schema(
+        summary="Получить список групп",
+        description=(
+            "Возвращает список групп с поддержкой пагинации.\n\n"
+            "**Правила доступа:**\n"
+            "- **Старший тьютор / Старший менеджер:** видит ВСЕ группы.\n"
+            "- **Менеджер:** видит группы только своего филиала.\n"
+            "- **Тьютор:** видит только свои группы."
+        )
+    )
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
 
     @action(detail=True, methods=['get'])
     def clients(self, request, pk=None):
@@ -98,6 +112,7 @@ class GroupViewSet(viewsets.ReadOnlyModelViewSet):
 class StudentViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = StudentSerializer
     permission_classes = [IsAuthenticated]
+    pagination_class = StandardResultsSetPagination
 
     def get_queryset(self):
         auth = self.request.auth
@@ -109,15 +124,27 @@ class StudentViewSet(viewsets.ReadOnlyModelViewSet):
         branch_id = auth.get('branch_id')
         is_senior = auth.get('is_senior')
         
-        if role == 'tutor':
-            if is_senior:
-                return Student.objects.filter(branch_id=branch_id)
-            else:
-                return Student.objects.filter(group__tutor_id=user_id)
+        if is_senior:
+            return Student.objects.all()
+        elif role == 'tutor':
+            return Student.objects.filter(group__tutor_id=user_id)
         elif role == 'manager':
             return Student.objects.filter(branch_id=branch_id)
             
         return Student.objects.none()
+
+    @extend_schema(
+        summary="Получить список студентов",
+        description=(
+            "Возвращает список студентов с поддержкой пагинации.\n\n"
+            "**Правила доступа:**\n"
+            "- **Старший тьютор / Старший менеджер:** видит ВСЕХ студентов.\n"
+            "- **Менеджер:** видит студентов только своего филиала.\n"
+            "- **Тьютор:** видит только студентов своих групп."
+        )
+    )
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
 
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated, IsSeniorTutorOrManager])
     def all(self, request):
@@ -128,6 +155,7 @@ class StudentViewSet(viewsets.ReadOnlyModelViewSet):
 
 class ResumeViewSet(viewsets.ModelViewSet):
     serializer_class = ResumeSerializer
+    pagination_class = StandardResultsSetPagination
 
     def get_permissions(self):
         if self.action in ['destroy', 'verify']:
@@ -144,15 +172,27 @@ class ResumeViewSet(viewsets.ModelViewSet):
         branch_id = auth.get('branch_id')
         is_senior = auth.get('is_senior')
         
-        if role == 'tutor':
-            if is_senior:
-                return Resume.objects.filter(student__branch_id=branch_id)
-            else:
-                return Resume.objects.filter(student__group__tutor_id=user_id)
+        if is_senior:
+            return Resume.objects.all()
+        elif role == 'tutor':
+            return Resume.objects.filter(student__group__tutor_id=user_id)
         elif role == 'manager':
             return Resume.objects.filter(student__branch_id=branch_id)
             
         return Resume.objects.none()
+
+    @extend_schema(
+        summary="Получить список резюме",
+        description=(
+            "Возвращает список резюме с поддержкой пагинации.\n\n"
+            "**Правила доступа:**\n"
+            "- **Старший тьютор / Старший менеджер:** видит ВСЕ резюме.\n"
+            "- **Менеджер:** видит резюме только студентов своего филиала.\n"
+            "- **Тьютор:** видит резюме только студентов своих групп."
+        )
+    )
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
 
     @action(detail=False, methods=['get'], url_path='client')
     def client(self, request):
@@ -173,6 +213,7 @@ class ResumeViewSet(viewsets.ModelViewSet):
 
 class ParentReviewViewSet(viewsets.ModelViewSet):
     serializer_class = ParentReviewSerializer
+    pagination_class = StandardResultsSetPagination
     
     def get_permissions(self):
         if self.action == 'create':
@@ -189,11 +230,10 @@ class ParentReviewViewSet(viewsets.ModelViewSet):
             branch_id = auth.get('branch_id')
             is_senior = auth.get('is_senior')
             
-            if role == 'tutor':
-                if is_senior:
-                    qs = ParentReview.objects.filter(student__branch_id=branch_id)
-                else:
-                    qs = ParentReview.objects.filter(student__group__tutor_id=user_id)
+            if is_senior:
+                qs = ParentReview.objects.all()
+            elif role == 'tutor':
+                qs = ParentReview.objects.filter(student__group__tutor_id=user_id)
             elif role == 'manager':
                 qs = ParentReview.objects.filter(student__branch_id=branch_id)
                 
@@ -202,6 +242,19 @@ class ParentReviewViewSet(viewsets.ModelViewSet):
             qs = qs.filter(student__student_crm_id=student_crm_id)
             
         return qs
+
+    @extend_schema(
+        summary="Получить список отзывов родителей",
+        description=(
+            "Возвращает список отзывов с поддержкой пагинации.\n\n"
+            "**Правила доступа:**\n"
+            "- **Старший тьютор / Старший менеджер:** видит ВСЕ отзывы.\n"
+            "- **Менеджер:** видит отзывы только студентов своего филиала.\n"
+            "- **Тьютор:** видит отзывы только студентов своих групп."
+        )
+    )
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
 
 
 class NewsViewSet(viewsets.ReadOnlyModelViewSet):
