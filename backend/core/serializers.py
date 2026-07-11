@@ -143,9 +143,16 @@ def generate_presigned_url(file_field, expires_in: int = 900) -> str | None:
 
 
 class GroupSerializer(serializers.ModelSerializer):
+    total_students = serializers.IntegerField(read_only=True)
+    resumes_written_count = serializers.IntegerField(read_only=True)
+    resumes_verified_count = serializers.IntegerField(read_only=True)
+
     class Meta:
         model = Group
-        fields = ["id", "crm_group_id", "name", "custom_aerodromnaya", "branch", "tutor"]
+        fields = [
+            "id", "crm_group_id", "name", "custom_aerodromnaya", "branch", "tutor",
+            "total_students", "resumes_written_count", "resumes_verified_count"
+        ]
 
 
 class StudentSerializer(serializers.ModelSerializer):
@@ -167,6 +174,11 @@ class ResumeSerializer(serializers.ModelSerializer):
         student_crm_id = validated_data.pop("student_crm_id")
         student = get_object_or_404(Student, student_crm_id=student_crm_id)
         validated_data["student"] = student
+        
+        if not student.is_added:
+            student.is_added = True
+            student.save(update_fields=['is_added'])
+            
         return super().create(validated_data)
 
 

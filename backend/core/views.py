@@ -4,6 +4,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from django.db.models import Count, Q
 
 from .serializers import CustomTokenObtainPairSerializer
 from .models import Group, Student, Resume, ParentReview, News, Category, Module, Manager, TutorProfile
@@ -69,16 +70,22 @@ class GroupViewSet(viewsets.ReadOnlyModelViewSet):
         branch_id = auth.get('branch_id')
         is_senior = auth.get('is_senior')
         
+        qs = Group.objects.none()
+        
         if role == 'tutor':
             if is_senior:
-                return Group.objects.filter(branch_id=branch_id)
+                qs = Group.objects.filter(branch_id=branch_id)
             else:
-                return Group.objects.filter(tutor_id=user_id)
+                qs = Group.objects.filter(tutor_id=user_id)
         elif role == 'manager':
             # Менеджеры могут видеть группы в рамках своего филиала
-            return Group.objects.filter(branch_id=branch_id)
+            qs = Group.objects.filter(branch_id=branch_id)
         
-        return Group.objects.none()
+        return qs.annotate(
+            total_students=Count('students', distinct=True),
+            resumes_written_count=Count('students', filter=Q(students__is_added=True), distinct=True),
+            resumes_verified_count=Count('students', filter=Q(students__resumes__is_verified=True), distinct=True)
+        )
 
     @action(detail=True, methods=['get'])
     def clients(self, request, pk=None):

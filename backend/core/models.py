@@ -136,6 +136,7 @@ class Student(models.Model):
     )
     student_name = models.CharField(max_length=255, verbose_name="ФИО ученика")
     study_start_date = models.DateField(null=True, blank=True, verbose_name="Дата начала обучения")
+    is_added = models.BooleanField(default=False, verbose_name="Резюме написано")
     branch = models.ForeignKey(
         Branch, on_delete=models.CASCADE, verbose_name="Филиал", related_name="students"
     )
