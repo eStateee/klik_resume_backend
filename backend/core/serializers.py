@@ -10,9 +10,11 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import (
+    Branch,
     Category,
     Group,
     Lesson,
+    Location,
     Manager,
     Module,
     News,
@@ -292,3 +294,15 @@ class CategorySerializer(serializers.ModelSerializer):
     def get_subcategories(self, obj) -> list:
         active_subcategories = obj.subcategories.filter(is_active=True)
         return SubcategorySerializer(active_subcategories, many=True, context=self.context).data
+
+
+class BranchSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Branch
+        fields = ["id", "name", "branch_crm_id"]
+
+
+class LocationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Location
+        fields = ["id", "name", "location_crm_id", "branch", "is_active"]

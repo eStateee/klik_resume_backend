@@ -5,14 +5,15 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.db.models import Count, Q
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import extend_schema, OpenApiParameter
+from drf_spectacular.types import OpenApiTypes
 
 from .serializers import CustomTokenObtainPairSerializer
-from .models import Group, Student, Resume, ParentReview, News, Category, Module, Manager, TutorProfile
+from .models import Group, Student, Resume, ParentReview, News, Category, Module, Manager, TutorProfile, Branch, Location
 from .serializers import (
     GroupSerializer, StudentSerializer, ResumeSerializer,
     ParentReviewSerializer, NewsSerializer, CategorySerializer,
-    ModuleSerializer
+    ModuleSerializer, BranchSerializer, LocationSerializer
 )
 from .permissions import IsTutor, IsManager, IsSeniorTutorOrManager
 from .pagination import StandardResultsSetPagination
@@ -273,3 +274,59 @@ class ModuleViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Module.objects.filter(is_active=True)
     serializer_class = ModuleSerializer
     permission_classes = [IsAuthenticated]
+
+
+class BranchViewSet(viewsets.ReadOnlyModelViewSet):
+    """GET /api/branches/ — список всех филиалов"""
+    queryset = Branch.objects.all()
+    serializer_class = BranchSerializer
+    permission_classes = [IsAuthenticated]
+
+
+class LocationViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    GET /api/locations/ — все локации.
+    GET /api/locations/?branch_id=<id> — локации конкретного филиала.
+    """
+    queryset = Location.objects.all()
+    serializer_class = LocationSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        branch_id = self.request.query_params.get("branch_id")
+        if branch_id is not None:
+            return Location.objects.filter(branch_id=branch_id)
+        return Location.objects.all()
+
+    @extend_schema(
+        summary="Получить весь список локаций или список локаций конкретного филиала",
+        description=(
+            "Возвращает список всех локаций. "
+            "Если передан `branch_id` — возвращаются только локации этого филиала."
+        ),
+        parameters=[
+            OpenApiParameter(
+                name="branch_id",
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description="ID филиала для фильтрации локаций.",
+            )
+        ],
+    )
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
+
+    @extend_schema(
+        summary="Получить локацию по ID",
+        parameters=[
+            OpenApiParameter(
+                name="id",
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.PATH,
+                description="ID локации (location_id)",
+            )
+        ],
+    )
+    def retrieve(self, request, *args, **kwargs):
+        return super().retrieve(request, *args, **kwargs)
