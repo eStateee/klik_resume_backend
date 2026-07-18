@@ -288,15 +288,15 @@ class LocationViewSet(viewsets.ReadOnlyModelViewSet):
     GET /api/locations/ — все локации.
     GET /api/locations/?branch_id=<id> — локации конкретного филиала.
     """
-    queryset = Location.objects.all()
+    queryset = Location.objects.filter(is_active=True)
     serializer_class = LocationSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
         branch_id = self.request.query_params.get("branch_id")
         if branch_id is not None:
-            return Location.objects.filter(branch_id=branch_id)
-        return Location.objects.all()
+            return Location.objects.filter(is_active=True, branch_id=branch_id)
+        return Location.objects.filter(is_active=True)
 
     @extend_schema(
         summary="Получить весь список локаций или список локаций конкретного филиала",
