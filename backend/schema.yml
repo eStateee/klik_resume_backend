@@ -4,6 +4,94 @@ info:
   version: 1.0.0
   description: KLik API
 paths:
+  /api/branches/:
+    get:
+      operationId: branches_list
+      summary: Получить список филиалов
+      tags:
+      - branches
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Branch'
+          description: ''
+  /api/branches/{id}/:
+    get:
+      operationId: branches_retrieve
+      summary: Получить филиал по ID
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: Уникальный идентификатор филиала.
+        required: true
+      tags:
+      - branches
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Branch'
+          description: ''
+  /api/locations/:
+    get:
+      operationId: locations_list
+      summary: Получить список локаций
+      description: |-
+        Возвращает список локаций. Если передан query-параметр `branch_id`,
+        возвращаются только локации указанного филиала.
+      parameters:
+      - name: branch_id
+        in: query
+        required: false
+        description: ID филиала для фильтрации локаций.
+        schema:
+          type: integer
+      tags:
+      - locations
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Location'
+          description: ''
+  /api/locations/{id}/:
+    get:
+      operationId: locations_retrieve
+      summary: Получить локацию по ID
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: ID локации (location_id).
+        required: true
+      tags:
+      - locations
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Location'
+          description: ''
   /api/auth/login/:
     post:
       operationId: auth_login_create
@@ -603,6 +691,47 @@ paths:
           description: ''
 components:
   schemas:
+    Branch:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          title: Название
+          maxLength: 255
+        branch_crm_id:
+          type: integer
+          title: ID филиала в CRM
+      required:
+      - branch_crm_id
+      - id
+      - name
+    Location:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          title: Название локации
+          maxLength: 255
+        location_crm_id:
+          type: integer
+          nullable: true
+          title: ID локации в CRM
+        branch:
+          type: integer
+          title: Филиал
+        is_active:
+          type: boolean
+          title: Активна
+      required:
+      - branch
+      - id
+      - name
     Category:
       type: object
       properties:
