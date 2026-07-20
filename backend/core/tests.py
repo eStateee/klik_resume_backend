@@ -1,4 +1,6 @@
+from unittest.mock import patch
 from django.test import TestCase
+from django.core.management import call_command
 from django.contrib.auth import authenticate
 from rest_framework.test import APIClient
 from rest_framework import status
@@ -157,3 +159,34 @@ class InactiveTutorTestCase(TestCase):
         user = authenticate(phone_number="375297778899")
         self.assertIsNotNone(user)
         self.assertTrue(user.is_active)
+
+
+class SyncLocationsTestCase(TestCase):
+    """Тесты команды синхронизации локаций из CRM."""
+
+    def setUp(self):
+        self.branch = Branch.objects.create(name="Минск", branch_crm_id=1)
+
+    @patch("core.management.commands.sync_locations.get_all_locations_from_crm")
+    def test_sync_locations_creates_and_preserves_custom_name(self, mock_crm):
+        """Новая локация получает имя из CRM, а при повторном запуске вручную измененное имя в БД не перезаписывается."""
+        # 1. Первый запуск: локации нет в БД, CRM возвращает name='CRM Name 1'
+        mock_crm.return_value = [
+            {"id": 501, "name": "CRM Name 1", "branch_id": 1, "is_active": 1}
+        ]
+        call_command("sync_locations")
+
+        loc = Location.objects.get(location_crm_id=501)
+        self.assertEqual(loc.name, "CRM Name 1")
+
+        # 2. Пользователь меняет название локации в БД
+        loc.name = "Кастомное название локации"
+        loc.save()
+
+        # 3. Повторный запуск синхронизации: CRM передает исходное имя 'CRM Name 1'
+        call_command("sync_locations")
+
+        loc.refresh_from_db()
+        # Проверяем, что имя в БД НЕ перезаписалось значением из CRM
+        self.assertEqual(loc.name, "Кастомное название локации")
+

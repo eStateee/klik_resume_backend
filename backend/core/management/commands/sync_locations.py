@@ -63,20 +63,22 @@ class Command(BaseCommand):
                 # CRM возвращает is_active как int (1/0)
                 is_active = bool(item.get("is_active", 1))
 
-                location, created = Location.objects.update_or_create(
-                    location_crm_id=crm_id,
-                    defaults={
-                        "name": name,
-                        "branch": branch_obj,
-                        "is_active": is_active,
-                    },
-                )
-                synced_db_pks.add(location.pk)
-
-                if created:
+                location = Location.objects.filter(location_crm_id=crm_id).first()
+                if not location:
+                    location = Location.objects.create(
+                        location_crm_id=crm_id,
+                        name=name,
+                        branch=branch_obj,
+                        is_active=is_active,
+                    )
                     created_count += 1
                 else:
+                    location.branch = branch_obj
+                    location.is_active = is_active
+                    location.save(update_fields=["branch", "is_active"])
                     updated_count += 1
+
+                synced_db_pks.add(location.pk)
 
             self.stdout.write(self.style.SUCCESS(
                 f"Синхронизация завершена. Создано: {created_count}, "

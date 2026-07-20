@@ -222,6 +222,9 @@ class Subcategory(models.Model):
 
 
 class Module(models.Model):
+    subject_crm_id = models.IntegerField(
+        unique=True, null=True, blank=True, verbose_name="ID предмета в CRM"
+    )
     name = models.CharField(max_length=255, verbose_name="Название модуля")
     subcategory = models.ForeignKey(
         Subcategory, on_delete=models.CASCADE, verbose_name="Подкатегория", related_name="modules"
