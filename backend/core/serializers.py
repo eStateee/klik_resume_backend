@@ -152,7 +152,7 @@ class GroupSerializer(serializers.ModelSerializer):
     class Meta:
         model = Group
         fields = [
-            "id", "crm_group_id", "name", "custom_aerodromnaya", "branch", "tutor",
+            "id", "crm_group_id", "name", "location", "branch", "tutor",
             "total_students", "resumes_written_count", "resumes_verified_count"
         ]
 

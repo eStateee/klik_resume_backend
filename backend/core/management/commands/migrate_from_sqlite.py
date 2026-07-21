@@ -91,14 +91,14 @@ class Command(BaseCommand):
                 # 3. Миграция групп
                 self.stdout.write("Шаг 3: Миграция групп (Group)")
                 cursor.execute("""
-                    SELECT id, crm_group_id, branch_ids, teacher_ids, name, custom_aerodromnaya
+                    SELECT id, crm_group_id, branch_ids, teacher_ids, name
                     FROM app_resumes_group
                 """)
                 old_groups = cursor.fetchall()
                 group_map = {} # old_id -> new_group_obj
                 
                 for row in old_groups:
-                    old_id, crm_id, branch_ids_raw, teacher_ids_raw, name, custom_aero = row
+                    old_id, crm_id, branch_ids_raw, teacher_ids_raw, name = row
                     
                     # Пытаемся найти тьютора
                     tutor_obj = None
@@ -141,7 +141,6 @@ class Command(BaseCommand):
                             'branch': group_branch,
                             'tutor': tutor_obj,
                             'name': name or f"Группа {crm_id}",
-                            'custom_aerodromnaya': custom_aero == '1' or custom_aero is True or str(custom_aero).lower() == 'true'
                         }
                     )
                     group_map[old_id] = group

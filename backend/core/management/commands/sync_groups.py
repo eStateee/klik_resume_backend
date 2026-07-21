@@ -1,6 +1,6 @@
 import logging
 from django.core.management.base import BaseCommand
-from core.models import Group, Branch, TutorProfile
+from core.models import Group, Branch, TutorProfile, Location
 from core.crm_integration import get_all_groups
 
 logger = logging.getLogger("app_resume")
@@ -35,11 +35,25 @@ class Command(BaseCommand):
                     teacher_ids = group_data.get("teacher_ids", [])
                 
                 branch_ids = group_data.get("branch_ids", [])
-                custom_aerodromnaya = group_data.get("custom_aerodromnaya", False)
-                if custom_aerodromnaya is None:
-                    custom_aerodromnaya = False
-                elif isinstance(custom_aerodromnaya, str):
-                    custom_aerodromnaya = custom_aerodromnaya.lower() == "true"
+                
+                # Обработка связи с локацией через поле custom_location (внешний location_crm_id)
+                location_crm_id_raw = group_data.get("custom_location")
+                location_obj = None
+
+                if location_crm_id_raw is not None and location_crm_id_raw != "":
+                    try:
+                        loc_crm_id = int(float(str(location_crm_id_raw).strip()))
+                        location_obj = Location.objects.filter(location_crm_id=loc_crm_id).first()
+                        if not location_obj:
+                            logger.warning(
+                                f"sync_groups: Локация с CRM ID {loc_crm_id} не найдена в БД "
+                                f"для группы {crm_group_id} ({name}). Поле 'location' останется пустым."
+                            )
+                    except (ValueError, TypeError):
+                        logger.warning(
+                            f"sync_groups: Не удалось преобразовать значение custom_location "
+                            f"'{location_crm_id_raw}' в число для группы {crm_group_id} ({name})"
+                        )
                 
                 # Обработка филиала
                 branch_obj = None
@@ -90,8 +104,8 @@ class Command(BaseCommand):
                     defaults={
                         "branch": branch_obj,
                         "tutor": tutor_obj,
+                        "location": location_obj,
                         "name": name or f"Group {crm_group_id}",
-                        "custom_aerodromnaya": custom_aerodromnaya,
                     },
                 )
                 

@@ -9,10 +9,10 @@ docker compose down # Просто остановить
 docker compose up -d --build
 docker compose exec backend python manage.py createsuperuser # суперюзер
 docker compose exec backend python manage.py migrate_from_sqlite
+docker compose exec backend python manage.py sync_locations
 docker compose exec backend python manage.py sync_tutors
 docker compose exec backend python manage.py sync_groups
 docker compose exec backend python manage.py sync_students
 docker compose exec backend python manage.py reset_resume_statuses # Сброс статуса резюме 
-docker compose exec backend python manage.py sync_locations
 docker compose exec backend python manage.py sync_groups_remove
 docker compose exec backend python manage.py sync_students_remove

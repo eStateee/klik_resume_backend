@@ -782,9 +782,10 @@ components:
           type: string
           title: Название группы
           maxLength: 255
-        custom_aerodromnaya:
-          type: boolean
-          title: Кастомная Аэродромная
+        location:
+          type: integer
+          nullable: true
+          title: Локация
         branch:
           type: integer
           title: Филиал

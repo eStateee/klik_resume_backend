@@ -87,7 +87,7 @@ class GroupViewSet(viewsets.ReadOnlyModelViewSet):
             total_students=Count('students', distinct=True),
             resumes_written_count=Count('students', filter=Q(students__is_added=True), distinct=True),
             resumes_verified_count=Count('students', filter=Q(students__resumes__is_verified=True), distinct=True)
-        )
+        ).order_by('name')
 
     @extend_schema(
         summary="Получить список групп",

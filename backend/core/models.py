@@ -109,7 +109,14 @@ class Group(models.Model):
         related_name="groups",
     )
     name = models.CharField(max_length=255, verbose_name="Название группы")
-    custom_aerodromnaya = models.BooleanField(default=False, verbose_name="Кастомная Аэродромная")
+    location = models.ForeignKey(
+        Location,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name="Локация",
+        related_name="groups",
+    )
 
     def __str__(self):
         return self.name
@@ -121,6 +128,7 @@ class Group(models.Model):
         indexes = [
             models.Index(fields=["branch"], name="group_branch_idx"),
             models.Index(fields=["tutor"], name="group_tutor_idx"),
+            models.Index(fields=["location"], name="group_location_idx"),
         ]
 
 

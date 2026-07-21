@@ -90,8 +90,9 @@ class AuthenticationTestCase(TestCase):
         response = self.client.get("/api/groups/")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         # Tutor should see their group
-        self.assertEqual(len(response.data), 1)
-        self.assertEqual(response.data[0]["name"], "Test Group")
+        results = response.data.get("results", response.data)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["name"], "Test Group")
 
     def test_unauthorized_access(self):
         # Without token, should return 401
@@ -189,4 +190,49 @@ class SyncLocationsTestCase(TestCase):
         loc.refresh_from_db()
         # Проверяем, что имя в БД НЕ перезаписалось значением из CRM
         self.assertEqual(loc.name, "Кастомное название локации")
+
+
+class SyncGroupsTestCase(TestCase):
+    """Тесты команды синхронизации групп и привязки к локациям."""
+
+    def setUp(self):
+        self.branch = Branch.objects.create(name="Минск", branch_crm_id=1)
+        self.location = Location.objects.create(
+            name="Локация Аэродромная", location_crm_id=501, branch=self.branch
+        )
+
+    @patch("core.management.commands.sync_groups.get_all_groups")
+    def test_sync_groups_links_location_correctly(self, mock_get_groups):
+        mock_get_groups.return_value = [
+            {
+                "id": "1001",
+                "name": "Группа 1001",
+                "branch_ids": [1],
+                "custom_location": "501",
+            },
+            {
+                "id": "1002",
+                "name": "Группа 1002",
+                "branch_ids": [1],
+                "custom_location": 999,  # Несуществующая локация
+            },
+            {
+                "id": "1003",
+                "name": "Группа 1003",
+                "branch_ids": [1],
+                "custom_location": None,
+            },
+        ]
+
+        call_command("sync_groups")
+
+        group1 = Group.objects.get(crm_group_id="1001")
+        self.assertEqual(group1.location, self.location)
+
+        group2 = Group.objects.get(crm_group_id="1002")
+        self.assertIsNone(group2.location)
+
+        group3 = Group.objects.get(crm_group_id="1003")
+        self.assertIsNone(group3.location)
+
 

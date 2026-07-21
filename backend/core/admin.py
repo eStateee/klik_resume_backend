@@ -34,8 +34,8 @@ class ManagerAdmin(admin.ModelAdmin):
 
 @admin.register(Group)
 class GroupAdmin(admin.ModelAdmin):
-    list_display = ('id', 'name', 'crm_group_id', 'branch', 'tutor')
-    list_filter = ('branch',)
+    list_display = ('id', 'name', 'crm_group_id', 'branch', 'location', 'tutor')
+    list_filter = ('branch', 'location')
     search_fields = ('name', 'crm_group_id')
 
 
