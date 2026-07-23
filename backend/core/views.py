@@ -102,6 +102,11 @@ class GroupViewSet(viewsets.ReadOnlyModelViewSet):
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
 
+    @extend_schema(
+        summary="Получить список студентов группы",
+        description="Возвращает список всех студентов, привязанных к указанной группе.",
+        responses={200: StudentSerializer(many=True)},
+    )
     @action(detail=True, methods=['get'])
     def clients(self, request, pk=None):
         group = self.get_object()

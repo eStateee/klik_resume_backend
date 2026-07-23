@@ -5,6 +5,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from django.conf import settings
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -158,9 +159,19 @@ class GroupSerializer(serializers.ModelSerializer):
 
 
 class StudentSerializer(serializers.ModelSerializer):
+    is_verified = serializers.SerializerMethodField()
+
     class Meta:
         model = Student
-        fields = ["id", "student_crm_id", "student_name", "study_start_date", "branch", "group"]
+        fields = [
+            "id", "student_crm_id", "student_name", "study_start_date",
+            "branch", "group", "is_added", "is_verified",
+        ]
+
+    @extend_schema_field(serializers.BooleanField())
+    def get_is_verified(self, obj):
+        """Возвращает True, если у студента есть хотя бы одно проверенное резюме."""
+        return obj.resumes.filter(is_verified=True).exists()
 
 
 class ResumeSerializer(serializers.ModelSerializer):

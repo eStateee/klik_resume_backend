@@ -311,7 +311,7 @@ paths:
           description: ''
   /api/groups/{id}/clients/:
     get:
-      operationId: groups_clients_retrieve
+      operationId: groups_clients_list
       parameters:
       - in: path
         name: id
@@ -328,7 +328,9 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Group'
+                type: array
+                items:
+                  $ref: '#/components/schemas/Student'
           description: ''
   /api/modules/:
     get:
