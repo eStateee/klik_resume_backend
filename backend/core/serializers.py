@@ -170,8 +170,11 @@ class StudentSerializer(serializers.ModelSerializer):
 
     @extend_schema_field(serializers.BooleanField())
     def get_is_verified(self, obj):
-        """Возвращает True, если у студента есть хотя бы одно проверенное резюме."""
-        return obj.resumes.filter(is_verified=True).exists()
+        """Возвращает True, если у студента есть резюме и все они проверены."""
+        resumes = obj.resumes.all()
+        if not resumes.exists():
+            return False
+        return not resumes.filter(is_verified=False).exists()
 
 
 class ResumeSerializer(serializers.ModelSerializer):
