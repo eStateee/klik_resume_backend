@@ -4,7 +4,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from django.db.models import Count, Q
+from django.db.models import Count, Q, Subquery, OuterRef
+from django.db.models.functions import Coalesce
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 from drf_spectacular.types import OpenApiTypes
 
@@ -83,10 +84,23 @@ class GroupViewSet(viewsets.ReadOnlyModelViewSet):
         elif role == 'manager':
             qs = Group.objects.filter(branch_id=branch_id)
         
+        # Подзапрос: кол-во студентов, у которых ВСЕ резюме проверены
+        verified_subq = (
+            Student.objects.filter(
+                group=OuterRef('pk'),
+                is_added=True,
+            )
+            .exclude(resumes__is_verified=False)
+            .order_by()
+            .values('group')
+            .annotate(cnt=Count('id'))
+            .values('cnt')
+        )
+
         return qs.annotate(
             total_students=Count('students', distinct=True),
             resumes_written_count=Count('students', filter=Q(students__is_added=True), distinct=True),
-            resumes_verified_count=Count('students', filter=Q(students__resumes__is_verified=True), distinct=True)
+            resumes_verified_count=Coalesce(Subquery(verified_subq), 0),
         ).order_by('name')
 
     @extend_schema(
