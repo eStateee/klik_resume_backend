@@ -236,3 +236,71 @@ class SyncGroupsTestCase(TestCase):
         self.assertIsNone(group3.location)
 
 
+class StudentFieldsTestCase(TestCase):
+    """Тесты полей is_review_exist и group_name в StudentSerializer."""
+
+    def setUp(self):
+        from core.models import Student, ParentReview
+        from core.serializers import StudentSerializer
+
+        self.branch = Branch.objects.create(name="Field Test Branch", branch_crm_id=200)
+        self.group = Group.objects.create(
+            crm_group_id="field_test_group",
+            branch=self.branch,
+            name="Алгоритмы Python",
+        )
+        self.student = Student.objects.create(
+            student_crm_id="field_student_1",
+            student_name="Иванов Иван",
+            branch=self.branch,
+            group=self.group,
+        )
+        self.StudentSerializer = StudentSerializer
+        self.ParentReview = ParentReview
+
+    def test_is_review_exist_false_no_reviews(self):
+        """Без отзывов — is_review_exist = False."""
+        data = self.StudentSerializer(self.student).data
+        self.assertFalse(data["is_review_exist"])
+
+    def test_is_review_exist_true_recent_review(self):
+        """Отзыв свежее 60 дней — is_review_exist = True."""
+        self.ParentReview.objects.create(
+            student=self.student, content="Отличная школа!"
+        )
+        data = self.StudentSerializer(self.student).data
+        self.assertTrue(data["is_review_exist"])
+
+    def test_is_review_exist_false_old_review(self):
+        """Отзыв старше 60 дней — is_review_exist = False."""
+        from datetime import timedelta
+        from django.utils import timezone
+
+        review = self.ParentReview.objects.create(
+            student=self.student, content="Старый отзыв"
+        )
+        # Принудительно сдвигаем дату создания в прошлое
+        old_date = timezone.now() - timedelta(days=61)
+        self.ParentReview.objects.filter(pk=review.pk).update(created_at=old_date)
+        # Обновляем объект из БД
+        self.student.refresh_from_db()
+        data = self.StudentSerializer(self.student).data
+        self.assertFalse(data["is_review_exist"])
+
+    def test_group_name_returns_group_name(self):
+        """group_name возвращает название группы."""
+        data = self.StudentSerializer(self.student).data
+        self.assertEqual(data["group_name"], "Алгоритмы Python")
+
+    def test_group_name_none_when_no_group(self):
+        """group_name = None, когда студент не привязан к группе."""
+        from core.models import Student
+
+        student_no_group = Student.objects.create(
+            student_crm_id="field_student_no_group",
+            student_name="Петров Пётр",
+            branch=self.branch,
+            group=None,
+        )
+        data = self.StudentSerializer(student_no_group).data
+        self.assertIsNone(data["group_name"])

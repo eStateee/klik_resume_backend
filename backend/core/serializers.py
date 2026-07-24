@@ -160,12 +160,15 @@ class GroupSerializer(serializers.ModelSerializer):
 
 class StudentSerializer(serializers.ModelSerializer):
     is_verified = serializers.SerializerMethodField()
+    is_review_exist = serializers.SerializerMethodField()
+    group_name = serializers.SerializerMethodField()
 
     class Meta:
         model = Student
         fields = [
             "id", "student_crm_id", "student_name", "study_start_date",
-            "branch", "group", "is_added", "is_verified",
+            "branch", "group", "group_name", "is_added", "is_verified",
+            "is_review_exist",
         ]
 
     @extend_schema_field(serializers.BooleanField())
@@ -175,6 +178,20 @@ class StudentSerializer(serializers.ModelSerializer):
         if not resumes.exists():
             return False
         return not resumes.filter(is_verified=False).exists()
+
+    @extend_schema_field(serializers.BooleanField())
+    def get_is_review_exist(self, obj):
+        """Возвращает True, если у студента есть хотя бы один отзыв за последние 60 дней."""
+        from datetime import timedelta
+        threshold = timezone.now() - timedelta(days=60)
+        return obj.parent_reviews.filter(created_at__gte=threshold).exists()
+
+    @extend_schema_field(serializers.CharField(allow_null=True))
+    def get_group_name(self, obj):
+        """Возвращает название группы студента или None."""
+        if obj.group is None:
+            return None
+        return obj.group.name
 
 
 class ResumeSerializer(serializers.ModelSerializer):

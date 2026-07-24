@@ -124,7 +124,7 @@ class GroupViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=['get'])
     def clients(self, request, pk=None):
         group = self.get_object()
-        students = group.students.all()
+        students = group.students.select_related('group').all()
         serializer = StudentSerializer(students, many=True)
         return Response(serializer.data)
 
@@ -145,13 +145,13 @@ class StudentViewSet(viewsets.ReadOnlyModelViewSet):
         is_senior = auth.get('is_senior')
         
         if is_senior:
-            return Student.objects.all()
+            return Student.objects.select_related('group').all()
         elif role == 'tutor':
-            return Student.objects.filter(group__tutor_id=user_id)
+            return Student.objects.select_related('group').filter(group__tutor_id=user_id)
         elif role == 'manager':
-            return Student.objects.filter(branch_id=branch_id)
+            return Student.objects.select_related('group').filter(branch_id=branch_id)
             
-        return Student.objects.none()
+        return Student.objects.select_related('group').none()
 
     @extend_schema(
         summary="Получить список студентов",
