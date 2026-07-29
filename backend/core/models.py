@@ -253,15 +253,17 @@ class Lesson(models.Model):
     module = models.ForeignKey(
         Module, on_delete=models.CASCADE, verbose_name="Модуль", related_name="lessons"
     )
+    lesson_number = models.PositiveIntegerField(default=1, verbose_name="Номер урока")
     file = models.FileField(upload_to="lessons/files/", verbose_name="Файл для просмотра (PDF)")
     archive = models.FileField(upload_to="lessons/archives/", verbose_name="Архив для скачивания")
 
     def __str__(self):
-        return f"Урок для модуля {self.module.name}"
+        return f"Урок №{self.lesson_number} для модуля {self.module.name}"
 
     class Meta:
         verbose_name = "Урок"
         verbose_name_plural = "Уроки"
+        ordering = ["lesson_number"]
 
 
 class TutorModule(models.Model):

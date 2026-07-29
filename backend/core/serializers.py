@@ -251,7 +251,7 @@ class LessonSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Lesson
-        fields = ["id", "file_url", "archive_url"]
+        fields = ["id", "lesson_number", "file_url", "archive_url"]
 
     def get_file_url(self, obj) -> str | None:
         try:
@@ -279,14 +279,28 @@ class ModuleSerializer(serializers.ModelSerializer):
     def _check_tutor_access(self, obj) -> bool:
         """Проверяет наличие активного доступа тьютора к модулю."""
         request = self.context.get("request")
-        if not request or not request.auth:
+        if not request:
             return False
 
-        role = request.auth.get("role")
-        user_id = request.auth.get("user_id")
+        role = None
+        user_id = None
+        is_senior = False
+
+        if request.auth:
+            role = request.auth.get("role")
+            user_id = request.auth.get("user_id")
+            is_senior = request.auth.get("is_senior", False)
+        elif hasattr(request, "user") and request.user and request.user.is_authenticated:
+            if isinstance(request.user, TutorProfile):
+                role = "tutor"
+                user_id = request.user.id
+                is_senior = getattr(request.user, "is_senior", False)
 
         if role != "tutor":
             return False
+
+        if is_senior:
+            return True
 
         return TutorModule.objects.filter(
             tutor_id=user_id,

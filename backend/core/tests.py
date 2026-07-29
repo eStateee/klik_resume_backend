@@ -304,3 +304,74 @@ class StudentFieldsTestCase(TestCase):
         )
         data = self.StudentSerializer(student_no_group).data
         self.assertIsNone(data["group_name"])
+
+
+class LessonAndSeniorTutorTestCase(TestCase):
+    """Тесты поля lesson_number в Lesson и автоматического доступа старшего тьютора ко всем модулям."""
+
+    def setUp(self):
+        from core.models import Category, Subcategory, Module, Lesson, TutorModule
+        from core.serializers import ModuleSerializer, LessonSerializer
+
+        self.branch = Branch.objects.create(name="Test Branch", branch_crm_id=300)
+        self.category = Category.objects.create(name="Программирование")
+        self.subcategory = Subcategory.objects.create(name="Python", category=self.category)
+        self.module = Module.objects.create(name="Основы Python", subcategory=self.subcategory)
+        
+        self.lesson1 = Lesson.objects.create(module=self.module, lesson_number=1)
+        self.lesson2 = Lesson.objects.create(module=self.module, lesson_number=2)
+
+        self.regular_tutor = TutorProfile.objects.create(
+            tutor_name="Обычный Тьютор",
+            phone_number="375291234567",
+            branch=self.branch,
+            is_senior=False,
+        )
+        self.senior_tutor = TutorProfile.objects.create(
+            tutor_name="Старший Тьютор",
+            phone_number="375297654321",
+            branch=self.branch,
+            is_senior=True,
+        )
+        self.client = APIClient()
+
+    def test_lesson_serializer_includes_lesson_number(self):
+        from core.serializers import LessonSerializer
+
+        data = LessonSerializer(self.lesson1).data
+        self.assertIn("lesson_number", data)
+        self.assertEqual(data["lesson_number"], 1)
+
+    def test_senior_tutor_sees_all_modules_and_lessons_without_tutor_module(self):
+        """Старший тьютор видит все модули и уроки без записи TutorModule."""
+        token_serializer = CustomTokenObtainPairSerializer()
+        token_data = token_serializer.validate({"phone_number": "375297654321"})
+        access_token = token_data["access"]
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access_token}")
+        response = self.client.get("/api/modules/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        modules = response.data.get("results") if isinstance(response.data, dict) else response.data
+        self.assertEqual(len(modules), 1)
+        module_data = modules[0]
+        self.assertTrue(module_data["is_accessible"])
+        self.assertEqual(len(module_data["lessons"]), 2)
+        self.assertEqual(module_data["lessons"][0]["lesson_number"], 1)
+        self.assertEqual(module_data["lessons"][1]["lesson_number"], 2)
+
+    def test_regular_tutor_cannot_see_lessons_without_tutor_module(self):
+        """Обычный тьютор не видит уроки без записи TutorModule."""
+        token_serializer = CustomTokenObtainPairSerializer()
+        token_data = token_serializer.validate({"phone_number": "375291234567"})
+        access_token = token_data["access"]
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access_token}")
+        response = self.client.get("/api/modules/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        modules = response.data.get("results") if isinstance(response.data, dict) else response.data
+        self.assertEqual(len(modules), 1)
+        module_data = modules[0]
+        self.assertFalse(module_data["is_accessible"])
+        self.assertEqual(len(module_data["lessons"]), 0)

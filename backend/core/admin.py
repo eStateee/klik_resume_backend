@@ -76,7 +76,8 @@ class ModuleAdmin(admin.ModelAdmin):
 
 @admin.register(Lesson)
 class LessonAdmin(admin.ModelAdmin):
-    list_display = ('id', 'module')
+    list_display = ('id', 'lesson_number', 'module')
+    list_filter = ('module',)
 
 
 @admin.register(TutorModule)

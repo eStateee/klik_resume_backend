@@ -4,94 +4,6 @@ info:
   version: 1.0.0
   description: KLik API
 paths:
-  /api/branches/:
-    get:
-      operationId: branches_list
-      summary: Получить список филиалов
-      tags:
-      - branches
-      security:
-      - jwtAuth: []
-      responses:
-        '200':
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Branch'
-          description: ''
-  /api/branches/{id}/:
-    get:
-      operationId: branches_retrieve
-      summary: Получить филиал по ID
-      parameters:
-      - in: path
-        name: id
-        schema:
-          type: integer
-        description: Уникальный идентификатор филиала.
-        required: true
-      tags:
-      - branches
-      security:
-      - jwtAuth: []
-      responses:
-        '200':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Branch'
-          description: ''
-  /api/locations/:
-    get:
-      operationId: locations_list
-      summary: Получить список локаций
-      description: |-
-        Возвращает список локаций. Если передан query-параметр `branch_id`,
-        возвращаются только локации указанного филиала.
-      parameters:
-      - name: branch_id
-        in: query
-        required: false
-        description: ID филиала для фильтрации локаций.
-        schema:
-          type: integer
-      tags:
-      - locations
-      security:
-      - jwtAuth: []
-      responses:
-        '200':
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Location'
-          description: ''
-  /api/locations/{id}/:
-    get:
-      operationId: locations_retrieve
-      summary: Получить локацию по ID
-      parameters:
-      - in: path
-        name: id
-        schema:
-          type: integer
-        description: ID локации (location_id).
-        required: true
-      tags:
-      - locations
-      security:
-      - jwtAuth: []
-      responses:
-        '200':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Location'
-          description: ''
   /api/auth/login/:
     post:
       operationId: auth_login_create
@@ -146,6 +58,45 @@ paths:
               schema:
                 $ref: '#/components/schemas/TokenRefresh'
           description: ''
+  /api/branches/:
+    get:
+      operationId: branches_list
+      description: GET /api/branches/ — список всех филиалов
+      tags:
+      - branches
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Branch'
+          description: ''
+  /api/branches/{id}/:
+    get:
+      operationId: branches_retrieve
+      description: GET /api/branches/ — список всех филиалов
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this Филиал.
+        required: true
+      tags:
+      - branches
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Branch'
+          description: ''
   /api/categories/:
     get:
       operationId: categories_list
@@ -187,7 +138,7 @@ paths:
     get:
       operationId: clients_list
       description: |-
-        Возвращает список студентов
+        Возвращает список студентов с поддержкой пагинации.
 
         **Правила доступа:**
         - **Старший тьютор / Старший менеджер:** видит ВСЕХ студентов.
@@ -204,7 +155,7 @@ paths:
       - name: size
         required: false
         in: query
-        description: Number of results to return per page (default is 50, max is 100).
+        description: Number of results to return per page.
         schema:
           type: integer
       tags:
@@ -257,7 +208,7 @@ paths:
     get:
       operationId: groups_list
       description: |-
-        Возвращает список групп
+        Возвращает список групп с поддержкой пагинации.
 
         **Правила доступа:**
         - **Старший тьютор / Старший менеджер:** видит ВСЕ группы.
@@ -274,7 +225,7 @@ paths:
       - name: size
         required: false
         in: query
-        description: Number of results to return per page (default is 50, max is 100).
+        description: Number of results to return per page.
         schema:
           type: integer
       tags:
@@ -312,6 +263,8 @@ paths:
   /api/groups/{id}/clients/:
     get:
       operationId: groups_clients_list
+      description: Возвращает список всех студентов, привязанных к указанной группе.
+      summary: Получить список студентов группы
       parameters:
       - in: path
         name: id
@@ -319,6 +272,18 @@ paths:
           type: integer
         description: A unique integer value identifying this Группа.
         required: true
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
       tags:
       - groups
       security:
@@ -328,9 +293,57 @@ paths:
           content:
             application/json:
               schema:
+                $ref: '#/components/schemas/PaginatedStudentList'
+          description: ''
+  /api/locations/:
+    get:
+      operationId: locations_list
+      description: Возвращает список всех локаций. Если передан `branch_id` — возвращаются
+        только локации этого филиала.
+      summary: Получить весь список локаций или список локаций конкретного филиала
+      parameters:
+      - in: query
+        name: branch_id
+        schema:
+          type: integer
+        description: ID филиала для фильтрации локаций.
+      tags:
+      - locations
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/Student'
+                  $ref: '#/components/schemas/Location'
+          description: ''
+  /api/locations/{id}/:
+    get:
+      operationId: locations_retrieve
+      description: |-
+        GET /api/locations/ — все локации.
+        GET /api/locations/?branch_id=<id> — локации конкретного филиала.
+      summary: Получить локацию по ID
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: ID локации (location_id)
+        required: true
+      tags:
+      - locations
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Location'
           description: ''
   /api/modules/:
     get:
@@ -422,7 +435,7 @@ paths:
     get:
       operationId: resumes_list
       description: |-
-        Возвращает список резюме
+        Возвращает список резюме с поддержкой пагинации.
 
         **Правила доступа:**
         - **Старший тьютор / Старший менеджер:** видит ВСЕ резюме.
@@ -439,7 +452,7 @@ paths:
       - name: size
         required: false
         in: query
-        description: Number of results to return per page (default is 50, max is 100).
+        description: Number of results to return per page.
         schema:
           type: integer
       tags:
@@ -655,7 +668,7 @@ paths:
     get:
       operationId: reviews_list
       description: |-
-        Возвращает список отзывов
+        Возвращает список отзывов с поддержкой пагинации.
 
         **Правила доступа:**
         - **Старший тьютор / Старший менеджер:** видит ВСЕ отзывы.
@@ -672,7 +685,7 @@ paths:
       - name: size
         required: false
         in: query
-        description: Number of results to return per page (default is 50, max is 100).
+        description: Number of results to return per page.
         schema:
           type: integer
       - in: path
@@ -705,33 +718,11 @@ components:
           maxLength: 255
         branch_crm_id:
           type: integer
+          maximum: 2147483647
+          minimum: -2147483648
           title: ID филиала в CRM
       required:
       - branch_crm_id
-      - id
-      - name
-    Location:
-      type: object
-      properties:
-        id:
-          type: integer
-          readOnly: true
-        name:
-          type: string
-          title: Название локации
-          maxLength: 255
-        location_crm_id:
-          type: integer
-          nullable: true
-          title: ID локации в CRM
-        branch:
-          type: integer
-          title: Филиал
-        is_active:
-          type: boolean
-          title: Активна
-      required:
-      - branch
       - id
       - name
     Category:
@@ -812,6 +803,32 @@ components:
       - resumes_verified_count
       - resumes_written_count
       - total_students
+    Location:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          title: Название локации
+          maxLength: 255
+        location_crm_id:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          nullable: true
+          title: ID локации в CRM
+        branch:
+          type: integer
+          title: Филиал
+        is_active:
+          type: boolean
+          title: Активна
+      required:
+      - branch
+      - id
+      - name
     Module:
       type: object
       properties:
@@ -1083,9 +1100,25 @@ components:
           type: integer
           nullable: true
           title: Группа
+        group_name:
+          type: string
+          nullable: true
+          readOnly: true
+        is_added:
+          type: boolean
+          title: Резюме написано
+        is_verified:
+          type: boolean
+          readOnly: true
+        is_review_exist:
+          type: boolean
+          readOnly: true
       required:
       - branch
+      - group_name
       - id
+      - is_review_exist
+      - is_verified
       - student_crm_id
       - student_name
     TokenRefresh:
