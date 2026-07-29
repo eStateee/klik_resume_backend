@@ -1,6 +1,7 @@
 import logging
 
 import boto3
+from botocore.config import Config as BotoConfig
 from botocore.exceptions import BotoCoreError, ClientError
 from django.conf import settings
 from django.shortcuts import get_object_or_404
@@ -103,12 +104,19 @@ def _get_s3_client():
     if not access_key or not secret_key:
         raise RuntimeError("S3 не сконфигурирован: отсутствуют AWS_ACCESS_KEY_ID или AWS_SECRET_ACCESS_KEY")
 
+    endpoint_url = getattr(settings, "AWS_S3_ENDPOINT_URL", "https://storage-1022.s3hoster.by")
+    if not endpoint_url.startswith(("http://", "https://")):
+        endpoint_url = f"https://{endpoint_url}"
+
+    addressing_style = getattr(settings, "AWS_S3_ADDRESSING_STYLE", "path")
+
     return boto3.client(
         "s3",
-        endpoint_url=getattr(settings, "AWS_S3_ENDPOINT_URL", None),
+        endpoint_url=endpoint_url,
         aws_access_key_id=access_key,
         aws_secret_access_key=secret_key,
-        region_name=getattr(settings, "AWS_S3_REGION_NAME", None),
+        region_name=getattr(settings, "AWS_S3_REGION_NAME", "us-east-1"),
+        config=BotoConfig(signature_version="s3v4", s3={"addressing_style": addressing_style}),
     )
 
 

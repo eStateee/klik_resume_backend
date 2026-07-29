@@ -2,7 +2,7 @@
 
 ### Авторизация через PowerShell
 ```powershell
-Invoke-RestMethod -Uri http://localhost:8000/api/auth/login/ -Method POST -Headers @{"Content-Type"="application/json"} -Body '{"phone_number": "375291234567"}'
+Invoke-RestMethod -Uri http://localhost:8000/api/auth/login/ -Method POST -Headers @{"Content-Type"="application/json"} -Body '{"phone_number": "375447123218"}'
 
 docker compose down -v # -v удаление и очистка БД!!!!!
 docker compose down # Просто остановить 

@@ -279,6 +279,7 @@ pip-selfcheck.json
 
 # Antigravity
 /.agent/
+/.agents/
 /docs/
 spec.md
 
