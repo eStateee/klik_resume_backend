@@ -286,3 +286,5 @@ spec.md
 /oldapp/
 /tasks/
 PROBLEM.txt
+CLAUDE.md
+.DS_Store

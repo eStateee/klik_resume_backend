@@ -277,7 +277,21 @@ class ModuleSerializer(serializers.ModelSerializer):
         fields = ["id", "name", "validity_period", "is_active", "is_accessible", "lessons"]
 
     def _check_tutor_access(self, obj) -> bool:
-        """Проверяет наличие активного доступа тьютора к модулю."""
+        """Проверяет наличие активного доступа тьютора к модулю.
+
+        Если в context передан явный target_tutor_id (используется эндпоинтом
+        /modules/tutor/<tutor_id>/), проверка идёт по указанному тьютору,
+        а не по текущему авторизованному пользователю.
+        """
+        if "target_tutor_id" in self.context:
+            if self.context.get("target_is_senior"):
+                return True
+            return TutorModule.objects.filter(
+                tutor_id=self.context["target_tutor_id"],
+                module=obj,
+                expires_at__gt=timezone.now(),
+            ).exists()
+
         request = self.context.get("request")
         if not request:
             return False
@@ -337,6 +351,8 @@ class SubcategorySerializer(serializers.ModelSerializer):
 
 
 class CategorySerializer(serializers.ModelSerializer):
+    """Полная версия: подкатегории вместе с модулями и уроками. Используется в retrieve."""
+
     # Только активные подкатегории в ответе
     subcategories = serializers.SerializerMethodField()
 
@@ -347,6 +363,28 @@ class CategorySerializer(serializers.ModelSerializer):
     def get_subcategories(self, obj) -> list:
         active_subcategories = obj.subcategories.filter(is_active=True)
         return SubcategorySerializer(active_subcategories, many=True, context=self.context).data
+
+
+class SubcategoryListSerializer(serializers.ModelSerializer):
+    """Подкатегория без модулей — используется в списке категорий."""
+
+    class Meta:
+        model = Subcategory
+        fields = ["id", "name", "is_active"]
+
+
+class CategoryListSerializer(serializers.ModelSerializer):
+    """Облегчённая версия: только подкатегории, без модулей и уроков. Используется в list."""
+
+    subcategories = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Category
+        fields = ["id", "name", "is_active", "subcategories"]
+
+    def get_subcategories(self, obj) -> list:
+        active_subcategories = obj.subcategories.filter(is_active=True)
+        return SubcategoryListSerializer(active_subcategories, many=True, context=self.context).data
 
 
 class BranchSerializer(serializers.ModelSerializer):

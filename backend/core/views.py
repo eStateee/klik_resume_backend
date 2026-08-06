@@ -6,6 +6,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.db.models import Count, Q, Subquery, OuterRef
 from django.db.models.functions import Coalesce
+from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 from drf_spectacular.types import OpenApiTypes
 
@@ -14,7 +15,7 @@ from .models import Group, Student, Resume, ParentReview, News, Category, Module
 from .serializers import (
     GroupSerializer, StudentSerializer, ResumeSerializer,
     ParentReviewSerializer, NewsSerializer, CategorySerializer,
-    ModuleSerializer, BranchSerializer, LocationSerializer
+    CategoryListSerializer, ModuleSerializer, BranchSerializer, LocationSerializer
 )
 from .permissions import IsTutor, IsManager, IsSeniorTutorOrManager
 from .pagination import StandardResultsSetPagination
@@ -285,14 +286,68 @@ class NewsViewSet(viewsets.ReadOnlyModelViewSet):
 
 class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Category.objects.filter(is_active=True)
-    serializer_class = CategorySerializer
     permission_classes = [IsAuthenticated]
+
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return CategoryListSerializer
+        return CategorySerializer
+
+    @extend_schema(
+        summary="Получить список категорий",
+        description="Возвращает категории вместе с подкатегориями, БЕЗ модулей и уроков.",
+        responses={200: CategoryListSerializer(many=True)},
+    )
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
+
+    @extend_schema(
+        summary="Получить категорию по ID",
+        description="Возвращает категорию вместе с подкатегориями, модулями и уроками.",
+        responses={200: CategorySerializer},
+    )
+    def retrieve(self, request, *args, **kwargs):
+        return super().retrieve(request, *args, **kwargs)
 
 
 class ModuleViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Module.objects.filter(is_active=True)
     serializer_class = ModuleSerializer
     permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        if self.action == 'by_tutor':
+            return [IsAuthenticated(), IsSeniorTutorOrManager()]
+        return super().get_permissions()
+
+    @extend_schema(
+        summary="Получить модули, доступные конкретному тьютору",
+        description=(
+            "Возвращает все активные модули с указанием, доступен ли каждый указанному "
+            "тьютору (`is_accessible`), и его уроками, если доступен.\n\n"
+            "Доступно только старшему тьютору или менеджеру."
+        ),
+        parameters=[
+            OpenApiParameter(
+                name="tutor_id",
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.PATH,
+                description="ID тьютора (TutorProfile.id)",
+            )
+        ],
+        responses={200: ModuleSerializer(many=True)},
+    )
+    @action(detail=False, methods=['get'], url_path=r'tutor/(?P<tutor_id>\d+)')
+    def by_tutor(self, request, tutor_id=None):
+        tutor = get_object_or_404(TutorProfile, pk=tutor_id)
+        qs = self.get_queryset()
+        context = {
+            **self.get_serializer_context(),
+            "target_tutor_id": tutor.id,
+            "target_is_senior": tutor.is_senior,
+        }
+        serializer = self.get_serializer(qs, many=True, context=context)
+        return Response(serializer.data)
 
 
 class BranchViewSet(viewsets.ReadOnlyModelViewSet):
