@@ -6,7 +6,6 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.db.models import Count, Q, Subquery, OuterRef
 from django.db.models.functions import Coalesce
-from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 from drf_spectacular.types import OpenApiTypes
 
@@ -15,7 +14,9 @@ from .models import Group, Student, Resume, ParentReview, News, Category, Module
 from .serializers import (
     GroupSerializer, StudentSerializer, ResumeSerializer,
     ParentReviewSerializer, NewsSerializer, CategorySerializer,
-    CategoryListSerializer, ModuleSerializer, BranchSerializer, LocationSerializer
+    CategoryListSerializer, ModuleSerializer, ModuleListSerializer,
+    BranchSerializer, LocationSerializer,
+    NO_MODULE_ACCESS_MESSAGE, accessible_module_ids, is_privileged_viewer, resolve_viewer
 )
 from .permissions import IsTutor, IsManager, IsSeniorTutorOrManager
 from .pagination import StandardResultsSetPagination
@@ -311,42 +312,75 @@ class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class ModuleViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    GET /api/modules/          — все активные модули, без уроков и без разделения по ролям.
+    GET /api/modules/<id>/     — модуль вместе с уроками.
+    GET /api/modules/tutor/    — модули, доступные владельцу access-токена.
+    """
     queryset = Module.objects.filter(is_active=True)
     serializer_class = ModuleSerializer
     permission_classes = [IsAuthenticated]
 
-    def get_permissions(self):
-        if self.action == 'by_tutor':
-            return [IsAuthenticated(), IsSeniorTutorOrManager()]
-        return super().get_permissions()
+    def get_serializer_class(self):
+        # В списке уроки не отдаём — только сами модули
+        if self.action == 'list':
+            return ModuleListSerializer
+        return ModuleSerializer
 
     @extend_schema(
-        summary="Получить модули, доступные конкретному тьютору",
+        summary="Получить список модулей",
         description=(
-            "Возвращает все активные модули с указанием, доступен ли каждый указанному "
-            "тьютору (`is_accessible`), и его уроками, если доступен.\n\n"
-            "Доступно только старшему тьютору или менеджеру."
+            "Возвращает ВСЕ активные модули без разделения по ролям.\n\n"
+            "Уроки в этом эндпоинте **не отдаются** — только сами модули. "
+            "Чтобы получить уроки, используйте `GET /api/modules/{id}/` "
+            "или `GET /api/modules/tutor/`.\n\n"
+            "Поле `is_accessible` показывает, есть ли доступ к модулю у текущего "
+            "пользователя: у менеджера и старшего тьютора — всегда `true`, "
+            "у обычного тьютора — по наличию активного `TutorModule`."
         ),
-        parameters=[
-            OpenApiParameter(
-                name="tutor_id",
-                type=OpenApiTypes.INT,
-                location=OpenApiParameter.PATH,
-                description="ID тьютора (TutorProfile.id)",
-            )
-        ],
+        responses={200: ModuleListSerializer(many=True)},
+    )
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
+
+    @extend_schema(
+        summary="Получить модуль по ID",
+        description=(
+            "Возвращает модуль вместе с уроками. Доступен всем авторизованным "
+            "пользователям без разделения по ролям.\n\n"
+            "Уроки отдаются, только если `is_accessible` = `true`, иначе `lessons` пуст."
+        ),
+        responses={200: ModuleSerializer},
+    )
+    def retrieve(self, request, *args, **kwargs):
+        return super().retrieve(request, *args, **kwargs)
+
+    @extend_schema(
+        summary="Получить доступные модули текущего пользователя",
+        description=(
+            "Пользователь определяется по access-токену, параметры не передаются.\n\n"
+            "**Правила выдачи:**\n"
+            "- **Менеджер / Старший тьютор:** все активные модули (полный доступ).\n"
+            "- **Обычный тьютор:** только модули с активным (непросроченным) "
+            "доступом `TutorModule`; остальные в ответ не попадают.\n\n"
+            "Модули возвращаются вместе с уроками.\n\n"
+            f"Если доступных модулей нет, возвращается "
+            f"`{{\"detail\": \"{NO_MODULE_ACCESS_MESSAGE}\"}}`."
+        ),
         responses={200: ModuleSerializer(many=True)},
     )
-    @action(detail=False, methods=['get'], url_path=r'tutor/(?P<tutor_id>\d+)')
-    def by_tutor(self, request, tutor_id=None):
-        tutor = get_object_or_404(TutorProfile, pk=tutor_id)
-        qs = self.get_queryset()
-        context = {
-            **self.get_serializer_context(),
-            "target_tutor_id": tutor.id,
-            "target_is_senior": tutor.is_senior,
-        }
-        serializer = self.get_serializer(qs, many=True, context=context)
+    @action(detail=False, methods=['get'], url_path='tutor')
+    def my(self, request):
+        role, user_id, is_senior = resolve_viewer(request)
+
+        qs = Module.objects.filter(is_active=True)
+        if not is_privileged_viewer(role, is_senior):
+            qs = qs.filter(id__in=accessible_module_ids(user_id))
+
+        if not qs.exists():
+            return Response({"detail": NO_MODULE_ACCESS_MESSAGE})
+
+        serializer = self.get_serializer(qs, many=True)
         return Response(serializer.data)
 
 

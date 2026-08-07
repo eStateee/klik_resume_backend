@@ -149,6 +149,47 @@ def generate_presigned_url(file_field, expires_in: int = 900) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Доступ тьютора к модулям
+# ---------------------------------------------------------------------------
+
+# Сообщение для тьютора, у которого нет ни одного доступного модуля
+NO_MODULE_ACCESS_MESSAGE = "Нет доступа ни к одному модулю."
+
+
+def resolve_viewer(request):
+    """
+    Определяет (role, user_id, is_senior) текущего пользователя.
+    Основной источник — клеймы JWT в request.auth; фолбэк — request.user.
+    """
+    if request is None:
+        return None, None, False
+
+    auth = getattr(request, "auth", None)
+    if auth:
+        return auth.get("role"), auth.get("user_id"), bool(auth.get("is_senior", False))
+
+    user = getattr(request, "user", None)
+    if isinstance(user, TutorProfile):
+        return "tutor", user.id, bool(user.is_senior)
+    if isinstance(user, Manager):
+        return "manager", user.id, bool(user.is_senior)
+
+    return None, None, False
+
+
+def is_privileged_viewer(role, is_senior) -> bool:
+    """Менеджер и старший тьютор имеют полный доступ ко всем модулям."""
+    return role == "manager" or (role == "tutor" and bool(is_senior))
+
+
+def accessible_module_ids(tutor_id):
+    """ID модулей, к которым у тьютора есть непросроченный доступ."""
+    return TutorModule.objects.filter(
+        tutor_id=tutor_id, expires_at__gt=timezone.now()
+    ).values_list("module_id", flat=True)
+
+
+# ---------------------------------------------------------------------------
 # Сериализаторы данных
 # ---------------------------------------------------------------------------
 
@@ -268,53 +309,28 @@ class LessonSerializer(serializers.ModelSerializer):
             return None
 
 
-class ModuleSerializer(serializers.ModelSerializer):
+class ModuleListSerializer(serializers.ModelSerializer):
+    """Модуль без уроков — используется в списке модулей."""
+
     is_accessible = serializers.SerializerMethodField()
-    lessons = serializers.SerializerMethodField()
 
     class Meta:
         model = Module
-        fields = ["id", "name", "validity_period", "is_active", "is_accessible", "lessons"]
+        fields = ["id", "name", "validity_period", "is_active", "is_accessible"]
 
     def _check_tutor_access(self, obj) -> bool:
-        """Проверяет наличие активного доступа тьютора к модулю.
-
-        Если в context передан явный target_tutor_id (используется эндпоинтом
-        /modules/tutor/<tutor_id>/), проверка идёт по указанному тьютору,
-        а не по текущему авторизованному пользователю.
         """
-        if "target_tutor_id" in self.context:
-            if self.context.get("target_is_senior"):
-                return True
-            return TutorModule.objects.filter(
-                tutor_id=self.context["target_tutor_id"],
-                module=obj,
-                expires_at__gt=timezone.now(),
-            ).exists()
+        Проверяет наличие доступа к модулю у текущего пользователя.
+        Менеджер и старший тьютор — полный доступ; обычному тьютору нужен
+        активный (непросроченный) TutorModule.
+        """
+        role, user_id, is_senior = resolve_viewer(self.context.get("request"))
 
-        request = self.context.get("request")
-        if not request:
-            return False
-
-        role = None
-        user_id = None
-        is_senior = False
-
-        if request.auth:
-            role = request.auth.get("role")
-            user_id = request.auth.get("user_id")
-            is_senior = request.auth.get("is_senior", False)
-        elif hasattr(request, "user") and request.user and request.user.is_authenticated:
-            if isinstance(request.user, TutorProfile):
-                role = "tutor"
-                user_id = request.user.id
-                is_senior = getattr(request.user, "is_senior", False)
+        if is_privileged_viewer(role, is_senior):
+            return True
 
         if role != "tutor":
             return False
-
-        if is_senior:
-            return True
 
         return TutorModule.objects.filter(
             tutor_id=user_id,
@@ -328,6 +344,15 @@ class ModuleSerializer(serializers.ModelSerializer):
         if cache_key not in self.context:
             self.context[cache_key] = self._check_tutor_access(obj)
         return self.context[cache_key]
+
+
+class ModuleSerializer(ModuleListSerializer):
+    """Модуль вместе с уроками — используется там, где уроки нужны."""
+
+    lessons = serializers.SerializerMethodField()
+
+    class Meta(ModuleListSerializer.Meta):
+        fields = ModuleListSerializer.Meta.fields + ["lessons"]
 
     def get_lessons(self, obj) -> list:
         # Используем кэшированный результат — без повторного DB-запроса

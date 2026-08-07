@@ -1,11 +1,13 @@
+from datetime import timedelta
 from unittest.mock import patch
 from django.test import TestCase
 from django.core.management import call_command
 from django.contrib.auth import authenticate
+from django.utils import timezone
 from rest_framework.test import APIClient
 from rest_framework import status
 from core.models import Branch, Location, Manager, TutorProfile, Group
-from core.serializers import CustomTokenObtainPairSerializer
+from core.serializers import CustomTokenObtainPairSerializer, NO_MODULE_ACCESS_MESSAGE
 from rest_framework_simplejwt.tokens import AccessToken
 
 class AuthenticationTestCase(TestCase):
@@ -344,15 +346,11 @@ class LessonAndSeniorTutorTestCase(TestCase):
 
     def test_senior_tutor_sees_all_modules_and_lessons_without_tutor_module(self):
         """Старший тьютор видит все модули и уроки без записи TutorModule."""
-        token_serializer = CustomTokenObtainPairSerializer()
-        token_data = token_serializer.validate({"phone_number": "375297654321"})
-        access_token = token_data["access"]
-
-        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access_token}")
-        response = self.client.get("/api/modules/")
+        self._authenticate("375297654321")
+        response = self.client.get("/api/modules/tutor/")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
-        modules = response.data.get("results") if isinstance(response.data, dict) else response.data
+        modules = response.data
         self.assertEqual(len(modules), 1)
         module_data = modules[0]
         self.assertTrue(module_data["is_accessible"])
@@ -360,18 +358,146 @@ class LessonAndSeniorTutorTestCase(TestCase):
         self.assertEqual(module_data["lessons"][0]["lesson_number"], 1)
         self.assertEqual(module_data["lessons"][1]["lesson_number"], 2)
 
-    def test_regular_tutor_cannot_see_lessons_without_tutor_module(self):
-        """Обычный тьютор не видит уроки без записи TutorModule."""
-        token_serializer = CustomTokenObtainPairSerializer()
-        token_data = token_serializer.validate({"phone_number": "375291234567"})
-        access_token = token_data["access"]
+    def _token_for(self, phone_number):
+        token_data = CustomTokenObtainPairSerializer().validate({"phone_number": phone_number})
+        return token_data["access"]
 
-        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access_token}")
+    def _authenticate(self, phone_number):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self._token_for(phone_number)}")
+
+    def _grant_access(self, tutor, module, days=1):
+        from core.models import TutorModule
+
+        return TutorModule.objects.create(
+            tutor=tutor, module=module, expires_at=timezone.now() + timedelta(days=days)
+        )
+
+    def test_modules_list_has_no_lessons(self):
+        """GET /modules/ отдаёт все активные модули и НЕ содержит уроков."""
+        from core.models import Module
+
+        Module.objects.create(name="Второй модуль", subcategory=self.subcategory)
+
+        self._authenticate("375291234567")
         response = self.client.get("/api/modules/")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 2)
+        for module_data in response.data:
+            self.assertNotIn("lessons", module_data)
+        self.assertFalse(response.data[0]["is_accessible"])
 
-        modules = response.data.get("results") if isinstance(response.data, dict) else response.data
+    def test_module_detail_available_without_access(self):
+        """GET /modules/<id>/ доступен тьютору без TutorModule (уроки при этом пустые)."""
+        self._authenticate("375291234567")
+        response = self.client.get(f"/api/modules/{self.module.id}/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["id"], self.module.id)
+        self.assertFalse(response.data["is_accessible"])
+        self.assertEqual(response.data["lessons"], [])
+
+    def test_module_detail_includes_lessons_when_accessible(self):
+        """GET /modules/<id>/ отдаёт уроки, если доступ есть."""
+        self._grant_access(self.regular_tutor, self.module)
+
+        self._authenticate("375291234567")
+        response = self.client.get(f"/api/modules/{self.module.id}/")
+        self.assertTrue(response.data["is_accessible"])
+        self.assertEqual(len(response.data["lessons"]), 2)
+
+    def test_my_modules_regular_tutor_returns_only_accessible(self):
+        """GET /modules/tutor/ — обычный тьютор получает только свои доступные модули."""
+        from core.models import Module
+
+        Module.objects.create(name="Недоступный модуль", subcategory=self.subcategory)
+        self._grant_access(self.regular_tutor, self.module)
+
+        self._authenticate("375291234567")
+        response = self.client.get("/api/modules/tutor/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["id"], self.module.id)
+        self.assertTrue(response.data[0]["is_accessible"])
+        self.assertEqual(len(response.data[0]["lessons"]), 2)
+
+    def test_my_modules_without_access_returns_message(self):
+        """GET /modules/tutor/ без доступов — сообщение вместо списка."""
+        self._authenticate("375291234567")
+        response = self.client.get("/api/modules/tutor/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data, {"detail": NO_MODULE_ACCESS_MESSAGE})
+
+    def test_my_modules_ignores_expired_access(self):
+        """Просроченный TutorModule не считается доступом."""
+        from core.models import TutorModule
+
+        TutorModule.objects.create(
+            tutor=self.regular_tutor,
+            module=self.module,
+            expires_at=timezone.now() - timedelta(days=1),
+        )
+
+        self._authenticate("375291234567")
+        response = self.client.get("/api/modules/tutor/")
+        self.assertEqual(response.data, {"detail": NO_MODULE_ACCESS_MESSAGE})
+
+    def test_my_modules_senior_tutor_returns_all(self):
+        """GET /modules/tutor/ — старший тьютор получает все активные модули без TutorModule."""
+        from core.models import Module
+
+        Module.objects.create(name="Второй модуль", subcategory=self.subcategory)
+
+        self._authenticate("375297654321")
+        response = self.client.get("/api/modules/tutor/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 2)
+        self.assertTrue(all(m["is_accessible"] for m in response.data))
+
+    def _create_manager(self, phone="375293334455", is_senior=False):
+        location = Location.objects.create(name="Локация", branch=self.branch)
+        return Manager.objects.create(
+            name="Менеджер", phone=phone, location=location, is_senior=is_senior
+        )
+
+    def test_my_modules_manager_returns_all_with_lessons(self):
+        """GET /modules/tutor/ — менеджер имеет полный доступ ко всем модулям и урокам."""
+        from core.models import Module
+
+        self._create_manager()
+        Module.objects.create(name="Второй модуль", subcategory=self.subcategory)
+
+        self._authenticate("375293334455")
+        response = self.client.get("/api/modules/tutor/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 2)
+        self.assertTrue(all(m["is_accessible"] for m in response.data))
+
+        with_lessons = next(m for m in response.data if m["id"] == self.module.id)
+        self.assertEqual(len(with_lessons["lessons"]), 2)
+
+    def test_manager_is_accessible_true_in_module_detail(self):
+        """Менеджер видит is_accessible=true и уроки в /modules/<id>/."""
+        self._create_manager()
+
+        self._authenticate("375293334455")
+        response = self.client.get(f"/api/modules/{self.module.id}/")
+        self.assertTrue(response.data["is_accessible"])
+        self.assertEqual(len(response.data["lessons"]), 2)
+
+    def test_category_detail_shows_all_modules(self):
+        """В /categories/<id>/ модули не фильтруются по ролям."""
+        self._authenticate("375291234567")
+        response = self.client.get(f"/api/categories/{self.category.id}/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        modules = response.data["subcategories"][0]["modules"]
         self.assertEqual(len(modules), 1)
-        module_data = modules[0]
-        self.assertFalse(module_data["is_accessible"])
-        self.assertEqual(len(module_data["lessons"]), 0)
+        self.assertFalse(modules[0]["is_accessible"])
+
+    def test_category_detail_gives_manager_full_access(self):
+        """Менеджер видит уроки модулей в /categories/<id>/."""
+        self._create_manager()
+
+        self._authenticate("375293334455")
+        response = self.client.get(f"/api/categories/{self.category.id}/")
+        modules = response.data["subcategories"][0]["modules"]
+        self.assertTrue(modules[0]["is_accessible"])
+        self.assertEqual(len(modules[0]["lessons"]), 2)
