@@ -501,3 +501,109 @@ class LessonAndSeniorTutorTestCase(TestCase):
         modules = response.data["subcategories"][0]["modules"]
         self.assertTrue(modules[0]["is_accessible"])
         self.assertEqual(len(modules[0]["lessons"]), 2)
+
+
+class TokenRefreshTestCase(TestCase):
+    """Обновление access-токена по refresh-токену для обеих ролей."""
+
+    def setUp(self):
+        self.branch = Branch.objects.create(name="Minsk Refresh", branch_crm_id=77)
+        self.location = Location.objects.create(name="Center Refresh", branch=self.branch)
+        self.manager = Manager.objects.create(
+            name="Refresh Manager",
+            phone="375291110001",
+            location=self.location,
+            is_senior=False,
+        )
+        self.tutor = TutorProfile.objects.create(
+            tutor_name="Refresh Tutor",
+            phone_number="375291110002",
+            branch=self.branch,
+            is_senior=False,
+        )
+        self.senior_tutor = TutorProfile.objects.create(
+            tutor_name="Refresh Senior Tutor",
+            phone_number="375291110003",
+            branch=self.branch,
+            is_senior=True,
+        )
+        self.client = APIClient()
+
+    def _refresh_token_for(self, phone_number):
+        response = self.client.post(
+            "/api/auth/login/", {"phone_number": phone_number}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        return response.data["refresh"]
+
+    def _refresh(self, phone_number):
+        return self.client.post(
+            "/api/auth/token/refresh/",
+            {"refresh": self._refresh_token_for(phone_number)},
+            format="json",
+        )
+
+    def test_refresh_regular_tutor(self):
+        """Обычный тьютор обновляет токен и получает свои клеймы."""
+        response = self._refresh("375291110002")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        access = AccessToken(response.data["access"])
+        self.assertEqual(access["role"], "tutor")
+        self.assertEqual(access["user_id"], self.tutor.id)
+        self.assertFalse(access["is_senior"])
+        self.assertEqual(access["branch_id"], self.branch.id)
+
+    def test_refresh_senior_tutor(self):
+        """Старший тьютор обновляет токен."""
+        response = self._refresh("375291110003")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(AccessToken(response.data["access"])["is_senior"])
+
+    def test_refresh_manager(self):
+        """Менеджер обновляет токен и получает клеймы своей локации."""
+        response = self._refresh("375291110001")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        access = AccessToken(response.data["access"])
+        self.assertEqual(access["role"], "manager")
+        self.assertEqual(access["user_id"], self.manager.id)
+        self.assertEqual(access["location_id"], self.location.id)
+
+    def test_refreshed_access_token_authenticates(self):
+        """Полученным access-токеном можно ходить в защищённые эндпоинты."""
+        response = self._refresh("375291110002")
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {response.data['access']}")
+        profile = self.client.get("/api/profile/detail/")
+        self.assertEqual(profile.status_code, status.HTTP_200_OK)
+
+    def test_refresh_rejected_for_deactivated_tutor(self):
+        """Тьютор, деактивированный после логина, не может обновить токен."""
+        refresh = self._refresh_token_for("375291110002")
+        self.tutor.is_active = False
+        self.tutor.save()
+
+        response = self.client.post(
+            "/api/auth/token/refresh/", {"refresh": refresh}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_refresh_rejected_for_deleted_user(self):
+        """Удалённый пользователь не может обновить токен."""
+        refresh = self._refresh_token_for("375291110002")
+        self.tutor.delete()
+
+        response = self.client.post(
+            "/api/auth/token/refresh/", {"refresh": refresh}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_refresh_claims_reflect_current_db_state(self):
+        """Клеймы в новом access-токене берутся из БД, а не из старого refresh."""
+        refresh = self._refresh_token_for("375291110002")
+        self.tutor.is_senior = True
+        self.tutor.save()
+
+        response = self.client.post(
+            "/api/auth/token/refresh/", {"refresh": refresh}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(AccessToken(response.data["access"])["is_senior"])

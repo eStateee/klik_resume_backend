@@ -2,6 +2,8 @@ import os
 from pathlib import Path
 from datetime import timedelta
 
+from celery.schedules import crontab
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY_ENV = os.environ.get('DJANGO_SECRET_KEY')
@@ -130,6 +132,20 @@ CACHES = {
 CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'redis://localhost:6379/1')
 CELERY_RESULT_BACKEND = CELERY_BROKER_URL
 CELERY_TIMEZONE = TIME_ZONE
+
+CELERY_BEAT_SCHEDULE = {
+    # Ночь с воскресенья на понедельник — актуализация доступов тьюторов к модулям
+    # по их расписанию в AlfaCRM на предстоящую учебную неделю.
+    'sync-all-tutors-access': {
+        'task': 'core.tasks.sync_all_tutors_access',
+        'schedule': crontab(minute=0, hour=0, day_of_week=1),
+    },
+    # Ежечасно — закрывает доступы, у которых истёк expires_at в середине недели.
+    'revoke-expired-tutor-accesses': {
+        'task': 'core.tasks.revoke_expired_accesses',
+        'schedule': crontab(minute=0),
+    },
+}
 
 CRM_API_URL = os.environ.get('CRM_API_URL', 'https://demo.alfacrm.pro')
 CRM_EMAIL = os.environ.get('CRM_EMAIL', 'test@test.com')

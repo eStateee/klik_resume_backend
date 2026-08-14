@@ -4,13 +4,20 @@ import boto3
 from botocore.config import Config as BotoConfig
 from botocore.exceptions import BotoCoreError, ClientError
 from django.conf import settings
+from django.core.exceptions import ObjectDoesNotExist
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
-from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from rest_framework_simplejwt.exceptions import AuthenticationFailed
+from rest_framework_simplejwt.serializers import (
+    TokenObtainPairSerializer,
+    TokenRefreshSerializer,
+)
+from rest_framework_simplejwt.settings import api_settings as jwt_settings
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from .authentication import resolve_user_by_role
 from .models import (
     Branch,
     Category,
@@ -34,6 +41,28 @@ logger = logging.getLogger("core")
 # ---------------------------------------------------------------------------
 # Авторизация
 # ---------------------------------------------------------------------------
+
+
+def build_token_claims(user):
+    """Кастомные клеймы токена в зависимости от роли пользователя."""
+    if isinstance(user, Manager):
+        return {
+            "user_id": user.id,
+            "role": "manager",
+            "is_senior": user.is_senior,
+            "branch_id": user.location.branch_id if user.location else None,
+            "location_id": user.location_id,
+        }
+
+    if isinstance(user, TutorProfile):
+        return {
+            "user_id": user.id,
+            "role": "tutor",
+            "is_senior": user.is_senior,
+            "branch_id": user.branch_id,
+        }
+
+    raise serializers.ValidationError("Неизвестный тип пользователя.")
 
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -74,21 +103,62 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     def get_token(cls, user):
         """Генерирует RefreshToken с кастомными клеймами в зависимости от роли."""
         token = RefreshToken()
-        token["user_id"] = user.id
-
-        if isinstance(user, Manager):
-            token["role"] = "manager"
-            token["is_senior"] = user.is_senior
-            token["branch_id"] = user.location.branch_id if user.location else None
-            token["location_id"] = user.location_id
-        elif isinstance(user, TutorProfile):
-            token["role"] = "tutor"
-            token["is_senior"] = user.is_senior
-            token["branch_id"] = user.branch_id
-        else:
-            raise serializers.ValidationError("Неизвестный тип пользователя.")
+        for claim, value in build_token_claims(user).items():
+            token[claim] = value
 
         return token
+
+
+class CustomTokenRefreshSerializer(TokenRefreshSerializer):
+    """
+    Обновление access-токена для Manager/TutorProfile.
+
+    Стандартный TokenRefreshSerializer ищет владельца токена в
+    `django.contrib.auth.User`, которого в проекте нет — для любого
+    user_id без совпадающей строки в auth_user это падало с 500
+    (`User matching query does not exist`). Поэтому пользователя ищем сами,
+    по клейму `role`, как это делает CustomJWTAuthentication.
+    """
+
+    def validate(self, attrs):
+        refresh = self.token_class(attrs["refresh"])
+
+        role = refresh.payload.get("role")
+        user = resolve_user_by_role(role, refresh.payload.get("user_id"))
+
+        if user is None:
+            # Токен без кастомной роли — суперпользователь Django Admin
+            try:
+                return super().validate(attrs)
+            except ObjectDoesNotExist:
+                raise AuthenticationFailed(
+                    "Пользователь не найден", code="user_not_found"
+                )
+
+        access = refresh.access_token
+        # Клеймы перечитываем из БД: is_senior, филиал или локация могли
+        # измениться уже после выдачи refresh-токена.
+        for claim, value in build_token_claims(user).items():
+            access[claim] = value
+
+        data = {"access": str(access)}
+
+        if jwt_settings.ROTATE_REFRESH_TOKENS:
+            if jwt_settings.BLACKLIST_AFTER_ROTATION:
+                try:
+                    refresh.blacklist()
+                except AttributeError:
+                    # Приложение blacklist не подключено — метода нет
+                    pass
+
+            refresh.set_jti()
+            refresh.set_exp()
+            refresh.set_iat()
+            refresh.outstand()
+
+            data["refresh"] = str(refresh)
+
+        return data
 
 
 # ---------------------------------------------------------------------------

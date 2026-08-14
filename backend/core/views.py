@@ -1,4 +1,4 @@
-from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework import viewsets, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import action
@@ -9,7 +9,7 @@ from django.db.models.functions import Coalesce
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 from drf_spectacular.types import OpenApiTypes
 
-from .serializers import CustomTokenObtainPairSerializer
+from .serializers import CustomTokenObtainPairSerializer, CustomTokenRefreshSerializer
 from .models import Group, Student, Resume, ParentReview, News, Category, Module, Manager, TutorProfile, Branch, Location
 from .serializers import (
     GroupSerializer, StudentSerializer, ResumeSerializer,
@@ -24,6 +24,20 @@ from .pagination import StandardResultsSetPagination
 
 class PasswordlessLoginView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
+
+
+@extend_schema(
+    summary="Обновление access-токена",
+    description=(
+        "Выдаёт новый access-токен по refresh-токену. Владелец токена ищется "
+        "по клейму `role` в таблице Manager или TutorProfile. Клеймы "
+        "(`is_senior`, `branch_id`, `location_id`) перечитываются из БД, "
+        "поэтому изменения прав применяются сразу после обновления токена. "
+        "Деактивированный или удалённый пользователь получает 401."
+    ),
+)
+class CustomTokenRefreshView(TokenRefreshView):
+    serializer_class = CustomTokenRefreshSerializer
 
 
 class ProfileDetailView(APIView):

@@ -255,7 +255,11 @@ class Lesson(models.Model):
     )
     lesson_number = models.PositiveIntegerField(default=1, verbose_name="Номер урока")
     file = models.FileField(upload_to="lessons/files/", verbose_name="Файл для просмотра (PDF)")
-    archive = models.FileField(upload_to="lessons/archives/", verbose_name="Архив для скачивания")
+    archive = models.FileField(
+        upload_to="lessons/archives/",
+        blank=True,
+        verbose_name="Архив для скачивания",
+    )
 
     def __str__(self):
         return f"Урок №{self.lesson_number} для модуля {self.module.name}"
