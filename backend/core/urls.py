@@ -4,7 +4,7 @@ from rest_framework.routers import SimpleRouter
 from .views import (
     PasswordlessLoginView, CustomTokenRefreshView, ProfileDetailView, GroupViewSet, StudentViewSet,
     ResumeViewSet, ParentReviewViewSet, NewsViewSet, 
-    CategoryViewSet, ModuleViewSet, BranchViewSet, LocationViewSet
+    CategoryViewSet, ModuleViewSet, BranchViewSet, LocationViewSet, EmployeeViewSet
 )
 
 router = SimpleRouter()
@@ -16,6 +16,7 @@ router.register(r'categories', CategoryViewSet, basename='category')
 router.register(r'modules', ModuleViewSet, basename='module')
 router.register(r'branches', BranchViewSet, basename='branch')
 router.register(r'locations', LocationViewSet, basename='location')
+router.register(r'employees', EmployeeViewSet, basename='employee')
 
 urlpatterns = [
     path('', RedirectView.as_view(url='/api/docs/swagger/', permanent=False), name='api-root-redirect'),

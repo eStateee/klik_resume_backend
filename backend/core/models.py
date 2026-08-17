@@ -304,3 +304,58 @@ class News(models.Model):
         verbose_name = "Новость"
         verbose_name_plural = "Новости"
         ordering = ["-created_at"]
+
+
+class Employee(models.Model):
+    class Category(models.TextChoices):
+        MANAGEMENT = "management", "Руководство"
+        MANAGERS = "managers", "Менеджеры"
+        METHODOLOGY = "methodological", "Метод. и образовательный отдел"
+        MARKETING = "marketing", "Отдел маркетинга"
+        TECHNICAL = "technical", "Технический отдел"
+
+    full_name = models.CharField(max_length=255, verbose_name="ФИО")
+    category = models.CharField(
+        max_length=50,
+        choices=Category.choices,
+        verbose_name="Категория",
+    )
+    position = models.CharField(max_length=255, verbose_name="Должность")
+    branch = models.ForeignKey(
+        Branch,
+        on_delete=models.PROTECT,
+        verbose_name="Филиал (Город)",
+        related_name="employees",
+    )
+    location = models.ForeignKey(
+        Location,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name="Локация",
+        related_name="employees",
+    )
+    telegram_url = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        verbose_name="Ссылка на Telegram",
+    )
+    photo = models.FileField(
+        upload_to="employees/photos/",
+        blank=True,
+        null=True,
+        verbose_name="Фотография",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Создано")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="Обновлено")
+
+    def __str__(self):
+        return f"{self.full_name} ({self.get_category_display()})"
+
+    class Meta:
+        verbose_name = "Сотрудник"
+        verbose_name_plural = "Сотрудники"
+        ordering = ["full_name"]
+
+

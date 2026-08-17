@@ -3,7 +3,7 @@ import logging
 from django.db.models.signals import post_delete
 from django.dispatch import receiver
 
-from .models import Lesson
+from .models import Lesson, Employee
 
 logger = logging.getLogger("core")
 
@@ -28,3 +28,24 @@ def delete_lesson_files_from_s3(sender, instance, **kwargs):
                     instance.pk,
                     exc,
                 )
+
+
+@receiver(post_delete, sender=Employee)
+def delete_employee_photo_from_s3(sender, instance, **kwargs):
+    """Удаляет файл фотографии сотрудника из S3/хранилища при удалении записи Employee."""
+    if instance.photo and instance.photo.name:
+        try:
+            instance.photo.delete(save=False)
+            logger.info(
+                "Удалена фотография сотрудника: %s (Employee id=%s)",
+                instance.photo.name,
+                instance.pk,
+            )
+        except Exception as exc:
+            logger.error(
+                "Ошибка удаления фотографии %s (Employee id=%s): %s",
+                instance.photo.name,
+                instance.pk,
+                exc,
+            )
+

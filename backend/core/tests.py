@@ -2,11 +2,12 @@ from datetime import timedelta
 from unittest.mock import patch
 from django.test import TestCase
 from django.core.management import call_command
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.contrib.auth import authenticate
 from django.utils import timezone
 from rest_framework.test import APIClient
 from rest_framework import status
-from core.models import Branch, Location, Manager, TutorProfile, Group
+from core.models import Branch, Location, Manager, TutorProfile, Group, Employee
 from core.serializers import CustomTokenObtainPairSerializer, NO_MODULE_ACCESS_MESSAGE
 from rest_framework_simplejwt.tokens import AccessToken
 
@@ -607,3 +608,116 @@ class TokenRefreshTestCase(TestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertTrue(AccessToken(response.data["access"])["is_senior"])
+
+
+class EmployeeTestCase(TestCase):
+    def setUp(self):
+        self.branch = Branch.objects.create(name="Минск", branch_crm_id=1)
+        self.location = Location.objects.create(name="Аэродромная", branch=self.branch)
+        self.tutor = TutorProfile.objects.create(
+            tutor_name="Тестовый Тьютор",
+            phone_number="375299990001",
+            branch=self.branch,
+            is_senior=False,
+        )
+        self.employee1 = Employee.objects.create(
+            full_name="Иванов Иван Иванович",
+            category=Employee.Category.MANAGEMENT,
+            position="Директор",
+            branch=self.branch,
+            location=self.location,
+            telegram_url="https://t.me/ivanov",
+        )
+        self.employee2 = Employee.objects.create(
+            full_name="Петров Петр Петрович",
+            category=Employee.Category.TECHNICAL,
+            position="Ведущий разработчик",
+            branch=self.branch,
+            location=None,
+            telegram_url="https://t.me/petrov",
+        )
+        self.client = APIClient()
+
+    def _auth(self):
+        s = CustomTokenObtainPairSerializer()
+        access = s.get_token(self.tutor).access_token
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
+
+    def test_employee_str(self):
+        self.assertEqual(
+            str(self.employee1),
+            "Иванов Иван Иванович (Руководство)"
+        )
+
+    def test_employees_list_unauthenticated(self):
+        response = self.client.get("/api/employees/")
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_employees_list_authenticated_no_pagination(self):
+        self._auth()
+        response = self.client.get("/api/employees/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        # Проверяем, что ответ — это прямой список без пагинации (не словарь с 'results')
+        self.assertIsInstance(response.data, list)
+        self.assertEqual(len(response.data), 2)
+        names = [item["full_name"] for item in response.data]
+        self.assertIn("Иванов Иван Иванович", names)
+        self.assertIn("Петров Петр Петрович", names)
+        # Проверяем поля
+        first = next(item for item in response.data if item["id"] == self.employee1.id)
+        self.assertEqual(first["category_display"], "Руководство")
+        self.assertEqual(first["branch"], self.branch.id)
+        self.assertEqual(first["branch_name"], "Минск")
+        self.assertEqual(first["location"], self.location.id)
+        self.assertEqual(first["location_name"], "Аэродромная")
+        self.assertEqual(first["telegram_url"], "https://t.me/ivanov")
+        self.assertIsNone(first["photo_url"])
+
+    def test_employee_retrieve(self):
+        self._auth()
+        response = self.client.get(f"/api/employees/{self.employee1.id}/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["full_name"], "Иванов Иван Иванович")
+        self.assertEqual(response.data["position"], "Директор")
+        self.assertEqual(response.data["branch_name"], "Минск")
+        self.assertEqual(response.data["location_name"], "Аэродромная")
+
+    def test_employee_mutations_not_allowed(self):
+        self._auth()
+        post_res = self.client.post("/api/employees/", {"full_name": "Новый"})
+        self.assertEqual(post_res.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+        put_res = self.client.put(f"/api/employees/{self.employee1.id}/", {"full_name": "Измененный"})
+        self.assertEqual(put_res.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+        del_res = self.client.delete(f"/api/employees/{self.employee1.id}/")
+        self.assertEqual(del_res.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+
+    def test_employee_with_photo(self):
+        self._auth()
+        photo = SimpleUploadedFile("avatar.jpg", b"dummy_content", content_type="image/jpeg")
+        emp = Employee.objects.create(
+            full_name="Сидоров Сидор",
+            category=Employee.Category.MARKETING,
+            position="Маркетолог",
+            branch=self.branch,
+            photo=photo,
+        )
+        response = self.client.get(f"/api/employees/{emp.id}/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNotNone(response.data["photo_url"])
+        self.assertTrue(response.data["photo_url"].endswith(f"/api/employees/{emp.id}/photo/"))
+
+        # Проверяем эндпоинт фото (доступен даже без авторизации)
+        unauth_client = APIClient()
+        photo_res = unauth_client.get(f"/api/employees/{emp.id}/photo/")
+        self.assertIn(photo_res.status_code, [status.HTTP_200_OK, status.HTTP_302_FOUND])
+
+        # Проверяем 404 для сотрудника без фото
+        no_photo_res = unauth_client.get(f"/api/employees/{self.employee1.id}/photo/")
+        self.assertEqual(no_photo_res.status_code, status.HTTP_404_NOT_FOUND)
+
+        # Очистка
+        emp.delete()
+
+
+
+

@@ -21,6 +21,7 @@ from .authentication import resolve_user_by_role
 from .models import (
     Branch,
     Category,
+    Employee,
     Group,
     Lesson,
     Location,
@@ -492,3 +493,41 @@ class LocationSerializer(serializers.ModelSerializer):
     class Meta:
         model = Location
         fields = ["id", "name", "location_crm_id", "branch", "is_active"]
+
+
+class EmployeeSerializer(serializers.ModelSerializer):
+    category_display = serializers.CharField(source="get_category_display", read_only=True)
+    branch_name = serializers.CharField(source="branch.name", read_only=True)
+    location_name = serializers.CharField(source="location.name", default=None, read_only=True)
+    photo_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Employee
+        fields = [
+            "id",
+            "full_name",
+            "category",
+            "category_display",
+            "position",
+            "branch",
+            "branch_name",
+            "location",
+            "location_name",
+            "telegram_url",
+            "photo_url",
+            "created_at",
+            "updated_at",
+        ]
+
+    @extend_schema_field(serializers.CharField(allow_null=True))
+    def get_photo_url(self, obj) -> str | None:
+        if not obj.photo or not obj.photo.name:
+            return None
+        path = f"/api/employees/{obj.id}/photo/"
+        request = self.context.get("request")
+        if request is not None:
+            return request.build_absolute_uri(path)
+        return path
+
+
+

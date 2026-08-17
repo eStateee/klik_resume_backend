@@ -2,7 +2,7 @@ from django.contrib import admin
 from .models import (
     Branch, Location, TutorProfile, Manager,
     Group, Student, Resume, ParentReview,
-    Category, Subcategory, Module, Lesson, TutorModule, News,
+    Category, Subcategory, Module, Lesson, TutorModule, News, Employee,
 )
 
 
@@ -89,3 +89,12 @@ class TutorModuleAdmin(admin.ModelAdmin):
 @admin.register(News)
 class NewsAdmin(admin.ModelAdmin):
     list_display = ('id', 'title', 'created_at')
+
+
+@admin.register(Employee)
+class EmployeeAdmin(admin.ModelAdmin):
+    list_display = ('id', 'full_name', 'category', 'position', 'branch', 'location')
+    list_filter = ('category', 'branch', 'location')
+    search_fields = ('full_name', 'position', 'telegram_url')
+
+
