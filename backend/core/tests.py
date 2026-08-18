@@ -706,17 +706,16 @@ class EmployeeTestCase(TestCase):
         self.assertIsNotNone(response.data["photo_url"])
         self.assertTrue(response.data["photo_url"].endswith(f"/api/employees/{emp.id}/photo/"))
 
-        # Проверяем эндпоинт фото (доступен даже без авторизации)
-        unauth_client = APIClient()
-        photo_res = unauth_client.get(f"/api/employees/{emp.id}/photo/")
-        self.assertIn(photo_res.status_code, [status.HTTP_200_OK, status.HTTP_302_FOUND])
-
-        # Проверяем 404 для сотрудника без фото
-        no_photo_res = unauth_client.get(f"/api/employees/{self.employee1.id}/photo/")
-        self.assertEqual(no_photo_res.status_code, status.HTTP_404_NOT_FOUND)
+        # Проверка эндпоинта фото закомментирована вместе с эндпоинтом
+        # unauth_client = APIClient()
+        # photo_res = unauth_client.get(f"/api/employees/{emp.id}/photo/")
+        # self.assertIn(photo_res.status_code, [status.HTTP_200_OK, status.HTTP_302_FOUND])
+        # no_photo_res = unauth_client.get(f"/api/employees/{self.employee1.id}/photo/")
+        # self.assertEqual(no_photo_res.status_code, status.HTTP_404_NOT_FOUND)
 
         # Очистка
         emp.delete()
+
 
 
 

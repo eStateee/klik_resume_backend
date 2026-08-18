@@ -492,48 +492,50 @@ class EmployeeViewSet(viewsets.ReadOnlyModelViewSet):
     def retrieve(self, request, *args, **kwargs):
         return super().retrieve(request, *args, **kwargs)
 
-    @extend_schema(
-        summary="Получить фотографию сотрудника",
-        description="Возвращает файл фотографии сотрудника или перенаправляет на актуальный файл в хранилище.",
-        parameters=[
-            OpenApiParameter(
-                name="id",
-                type=OpenApiTypes.INT,
-                location=OpenApiParameter.PATH,
-                description="ID сотрудника",
-            )
-        ],
-        responses={200: bytes, 404: dict},
-    )
-    @action(detail=True, methods=["get"], permission_classes=[])
-    def photo(self, request, pk=None):
-        employee = self.get_object()
-        if not employee.photo or not employee.photo.name:
-            return Response(
-                {"detail": "У сотрудника нет фотографии."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+    # Временно скрыто: эндпоинт получения фото сотрудника
+    # @extend_schema(
+    #     summary="Получить фотографию сотрудника",
+    #     description="Возвращает файл фотографии сотрудника или перенаправляет на актуальный файл в хранилище.",
+    #     parameters=[
+    #         OpenApiParameter(
+    #             name="id",
+    #             type=OpenApiTypes.INT,
+    #             location=OpenApiParameter.PATH,
+    #             description="ID сотрудника",
+    #         )
+    #     ],
+    #     responses={200: bytes, 404: dict},
+    # )
+    # @action(detail=True, methods=["get"], permission_classes=[])
+    # def photo(self, request, pk=None):
+    #     employee = self.get_object()
+    #     if not employee.photo or not employee.photo.name:
+    #         return Response(
+    #             {"detail": "У сотрудника нет фотографии."},
+    #             status=status.HTTP_404_NOT_FOUND,
+    #         )
+    #
+    #     if getattr(settings, "AWS_ACCESS_KEY_ID", None) and getattr(
+    #         settings, "AWS_SECRET_ACCESS_KEY", None
+    #     ):
+    #         try:
+    #             s3_url = generate_presigned_url(employee.photo, expires_in=900)
+    #             if s3_url:
+    #                 return HttpResponseRedirect(s3_url)
+    #         except Exception as exc:
+    #             logging.getLogger("core").error(
+    #                 "Ошибка получения photo S3 URL для Employee id=%s: %s",
+    #                 employee.pk,
+    #                 exc,
+    #             )
+    #
+    #     try:
+    #         return FileResponse(employee.photo.open("rb"))
+    #     except FileNotFoundError:
+    #         return Response(
+    #             {"detail": "Файл фотографии не найден."},
+    #             status=status.HTTP_404_NOT_FOUND,
+    #         )
 
-        if getattr(settings, "AWS_ACCESS_KEY_ID", None) and getattr(
-            settings, "AWS_SECRET_ACCESS_KEY", None
-        ):
-            try:
-                s3_url = generate_presigned_url(employee.photo, expires_in=900)
-                if s3_url:
-                    return HttpResponseRedirect(s3_url)
-            except Exception as exc:
-                logging.getLogger("core").error(
-                    "Ошибка получения photo S3 URL для Employee id=%s: %s",
-                    employee.pk,
-                    exc,
-                )
-
-        try:
-            return FileResponse(employee.photo.open("rb"))
-        except FileNotFoundError:
-            return Response(
-                {"detail": "Файл фотографии не найден."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
 
 
