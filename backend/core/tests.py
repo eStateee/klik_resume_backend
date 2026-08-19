@@ -8,7 +8,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 from rest_framework import status
 from core.models import Branch, Location, Manager, TutorProfile, Group, Employee
-from core.serializers import CustomTokenObtainPairSerializer, NO_MODULE_ACCESS_MESSAGE
+from core.serializers import CustomTokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import AccessToken
 
 class AuthenticationTestCase(TestCase):
@@ -420,12 +420,12 @@ class LessonAndSeniorTutorTestCase(TestCase):
         self.assertTrue(response.data[0]["is_accessible"])
         self.assertEqual(len(response.data[0]["lessons"]), 2)
 
-    def test_my_modules_without_access_returns_message(self):
-        """GET /modules/tutor/ без доступов — сообщение вместо списка."""
+    def test_my_modules_without_access_returns_empty_list(self):
+        """GET /modules/tutor/ без доступов — пустой список вместо сообщения."""
         self._authenticate("375291234567")
         response = self.client.get("/api/modules/tutor/")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data, {"detail": NO_MODULE_ACCESS_MESSAGE})
+        self.assertEqual(response.data, [])
 
     def test_my_modules_ignores_expired_access(self):
         """Просроченный TutorModule не считается доступом."""
@@ -439,7 +439,8 @@ class LessonAndSeniorTutorTestCase(TestCase):
 
         self._authenticate("375291234567")
         response = self.client.get("/api/modules/tutor/")
-        self.assertEqual(response.data, {"detail": NO_MODULE_ACCESS_MESSAGE})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data, [])
 
     def test_my_modules_senior_tutor_returns_all(self):
         """GET /modules/tutor/ — старший тьютор получает все активные модули без TutorModule."""

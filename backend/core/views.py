@@ -19,7 +19,7 @@ from .serializers import (
     ParentReviewSerializer, NewsSerializer, CategorySerializer,
     CategoryListSerializer, ModuleSerializer, ModuleListSerializer,
     BranchSerializer, LocationSerializer, EmployeeSerializer,
-    NO_MODULE_ACCESS_MESSAGE, accessible_module_ids, is_privileged_viewer, resolve_viewer,
+    accessible_module_ids, is_privileged_viewer, resolve_viewer,
     generate_presigned_url
 )
 from .permissions import IsTutor, IsManager, IsSeniorTutorOrManager
@@ -382,8 +382,7 @@ class ModuleViewSet(viewsets.ReadOnlyModelViewSet):
             "- **Обычный тьютор:** только модули с активным (непросроченным) "
             "доступом `TutorModule`; остальные в ответ не попадают.\n\n"
             "Модули возвращаются вместе с уроками.\n\n"
-            f"Если доступных модулей нет, возвращается "
-            f"`{{\"detail\": \"{NO_MODULE_ACCESS_MESSAGE}\"}}`."
+            "Если доступных модулей нет, возвращается пустой список `[]`."
         ),
         responses={200: ModuleSerializer(many=True)},
     )
@@ -394,9 +393,6 @@ class ModuleViewSet(viewsets.ReadOnlyModelViewSet):
         qs = Module.objects.filter(is_active=True)
         if not is_privileged_viewer(role, is_senior):
             qs = qs.filter(id__in=accessible_module_ids(user_id))
-
-        if not qs.exists():
-            return Response({"detail": NO_MODULE_ACCESS_MESSAGE})
 
         serializer = self.get_serializer(qs, many=True)
         return Response(serializer.data)
