@@ -373,7 +373,8 @@ class ModuleViewSet(viewsets.ReadOnlyModelViewSet):
             "или `GET /api/modules/tutor/`.\n\n"
             "Поле `is_accessible` показывает, есть ли доступ к модулю у текущего "
             "пользователя: у менеджера и старшего тьютора — всегда `true`, "
-            "у обычного тьютора — по наличию активного `TutorModule`."
+            "у обычного тьютора — по наличию активного `TutorModule` либо если "
+            "у модуля стоит флаг `is_public` (доступен всем без выдачи доступа)."
         ),
         responses={200: ModuleListSerializer(many=True)},
     )
@@ -398,8 +399,9 @@ class ModuleViewSet(viewsets.ReadOnlyModelViewSet):
             "Пользователь определяется по access-токену, параметры не передаются.\n\n"
             "**Правила выдачи:**\n"
             "- **Менеджер / Старший тьютор:** все активные модули (полный доступ).\n"
-            "- **Обычный тьютор:** только модули с активным (непросроченным) "
-            "доступом `TutorModule`; остальные в ответ не попадают.\n\n"
+            "- **Обычный тьютор:** модули с активным (непросроченным) "
+            "доступом `TutorModule`, а также все модули с флагом `is_public=true` "
+            "(доступны без выдачи доступа); остальные в ответ не попадают.\n\n"
             "Модули возвращаются вместе с уроками.\n\n"
             "Если доступных модулей нет, возвращается пустой список `[]`."
         ),
@@ -411,7 +413,7 @@ class ModuleViewSet(viewsets.ReadOnlyModelViewSet):
 
         qs = Module.objects.filter(is_active=True).prefetch_related("lessons")
         if not is_privileged_viewer(role, is_senior):
-            qs = qs.filter(id__in=accessible_module_ids(user_id))
+            qs = qs.filter(Q(is_public=True) | Q(id__in=accessible_module_ids(user_id)))
 
         serializer = self.get_serializer(qs, many=True)
         return Response(serializer.data)

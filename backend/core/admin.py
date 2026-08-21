@@ -70,8 +70,8 @@ class SubcategoryAdmin(admin.ModelAdmin):
 
 @admin.register(Module)
 class ModuleAdmin(admin.ModelAdmin):
-    list_display = ('id', 'name', 'subcategory', 'validity_period', 'is_active')
-    list_filter = ('is_active', 'subcategory')
+    list_display = ('id', 'name', 'subcategory', 'validity_period', 'is_active', 'is_public')
+    list_filter = ('is_active', 'is_public', 'subcategory')
 
 
 @admin.register(Lesson)

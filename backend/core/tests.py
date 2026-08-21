@@ -431,6 +431,41 @@ class LessonAndSeniorTutorTestCase(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data, [])
 
+    def test_public_module_accessible_without_tutor_module(self):
+        """Модуль с is_public=True доступен обычному тьютору без TutorModule."""
+        self.module.is_public = True
+        self.module.save()
+
+        self._authenticate("375291234567")
+        response = self.client.get(f"/api/modules/{self.module.id}/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["is_accessible"])
+        self.assertEqual(len(response.data["lessons"]), 2)
+
+    def test_public_module_appears_in_my_modules_for_regular_tutor(self):
+        """GET /modules/tutor/ включает публичные модули для обычного тьютора без выданного доступа."""
+        self.module.is_public = True
+        self.module.save()
+
+        self._authenticate("375291234567")
+        response = self.client.get("/api/modules/tutor/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["id"], self.module.id)
+        self.assertTrue(response.data[0]["is_accessible"])
+        self.assertEqual(len(response.data[0]["lessons"]), 2)
+
+    def test_non_public_module_not_accessible_without_tutor_module(self):
+        """Модуль без is_public по-прежнему недоступен обычному тьютору без TutorModule."""
+        from core.models import Module
+
+        Module.objects.create(name="Приватный модуль", subcategory=self.subcategory, is_public=False)
+
+        self._authenticate("375291234567")
+        response = self.client.get("/api/modules/tutor/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data, [])
+
     def test_my_modules_ignores_expired_access(self):
         """Просроченный TutorModule не считается доступом."""
         from core.models import TutorModule

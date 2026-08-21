@@ -265,6 +265,11 @@ class Module(models.Model):
     )
     validity_period = models.IntegerField(default=7, verbose_name="Период действия (дни)")
     is_active = models.BooleanField(default=True, verbose_name="Активен")
+    is_public = models.BooleanField(
+        default=False,
+        verbose_name="Доступен всем",
+        help_text="Если включено, модуль доступен всем тьюторам и менеджерам без выдачи доступа",
+    )
 
     def __str__(self):
         return self.name

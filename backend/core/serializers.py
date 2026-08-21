@@ -485,7 +485,7 @@ class ModuleListSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Module
-        fields = ["id", "name", "validity_period", "is_active", "is_accessible"]
+        fields = ["id", "name", "validity_period", "is_active", "is_public", "is_accessible"]
 
     # Признак полного доступа в кэше контекста
     FULL_ACCESS = object()
@@ -513,6 +513,8 @@ class ModuleListSerializer(serializers.ModelSerializer):
         return self.context[cache_key]
 
     def get_is_accessible(self, obj) -> bool:
+        if obj.is_public:
+            return True
         accessible = self._accessible_ids()
         if accessible is self.FULL_ACCESS:
             return True
