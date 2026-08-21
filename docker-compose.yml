@@ -1,8 +1,10 @@
 services:
   db:
     image: postgres:15-alpine
+    # Только с самого сервера: наружу Postgres выставлять не нужно —
+    # к нему обращается только backend по внутренней сети compose.
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     env_file:
@@ -11,8 +13,10 @@ services:
 
   redis:
     image: redis:7-alpine
+    # Redis без пароля — публиковать его наружу нельзя: в нём лежат
+    # токен CRM и брокер Celery.
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     restart: always
 
   backend:
@@ -68,8 +72,11 @@ services:
   flower:
     build: ./backend
     command: celery -A _settings flower --port=5555
+    # Flower показывает и позволяет отменять задачи, поэтому наружу не выводим:
+    # доступ через SSH-туннель. Если публикация нужна — задайте
+    # FLOWER_BASIC_AUTH=логин:пароль в .env.
     ports:
-      - "5555:5555"
+      - "127.0.0.1:5555:5555"
     env_file:
       - .env
     environment:

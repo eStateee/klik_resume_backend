@@ -6,14 +6,43 @@ from celery.schedules import crontab
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+
+def env_bool(name, default=False):
+    """Читает булево значение из окружения ('True'/'1'/'yes' — истина)."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ('true', '1', 'yes', 'on')
+
+
+def env_list(name, default=None):
+    """Читает список значений из окружения (разделитель — запятая)."""
+    raw = os.environ.get(name)
+    if not raw:
+        return list(default or [])
+    return [item.strip() for item in raw.split(',') if item.strip()]
+
+
 SECRET_KEY_ENV = os.environ.get('DJANGO_SECRET_KEY')
-DEBUG = os.environ.get('DEBUG', 'True') == 'True'
+# По умолчанию DEBUG выключен: забытая переменная окружения на сервере не должна
+# приводить к раскрытию трейсбеков и настроек.
+DEBUG = env_bool('DEBUG', False)
 
 if not SECRET_KEY_ENV and not DEBUG:
     raise RuntimeError("DJANGO_SECRET_KEY must be set in production (DEBUG=False).")
 SECRET_KEY = SECRET_KEY_ENV or 'django-insecure-q&fidfi1f+vqdpfxo9ei!me!guhn*tz)8*4*&2n#wty07a7%^2'
-ALLOWED_HOSTS = ['*']
-CSRF_TRUSTED_ORIGINS = ['http://localhost:8000', 'http://127.0.0.1:8000', 'https://*.ngrok-free.dev']
+
+# Хосты задаются через окружение; '*' остаётся только для локальной разработки.
+ALLOWED_HOSTS = env_list('DJANGO_ALLOWED_HOSTS', ['*'] if DEBUG else [])
+if not ALLOWED_HOSTS:
+    raise RuntimeError(
+        "DJANGO_ALLOWED_HOSTS must list the server hostnames when DEBUG=False."
+    )
+
+CSRF_TRUSTED_ORIGINS = env_list(
+    'DJANGO_CSRF_TRUSTED_ORIGINS',
+    ['http://localhost:8000', 'http://127.0.0.1:8000', 'https://*.ngrok-free.dev'],
+)
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -98,19 +127,55 @@ MEDIA_ROOT = BASE_DIR / 'media'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-CORS_ALLOW_ALL_ORIGINS = True
+# CORS: полностью открытым остаётся только в DEBUG. На сервере перечисляем
+# origin'ы фронтенда в DJANGO_CORS_ALLOWED_ORIGINS.
+CORS_ALLOWED_ORIGINS = env_list('DJANGO_CORS_ALLOWED_ORIGINS')
+CORS_ALLOW_ALL_ORIGINS = env_bool('DJANGO_CORS_ALLOW_ALL_ORIGINS', DEBUG)
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'core.authentication.CustomJWTAuthentication',
     ),
+    # Закрыто по умолчанию: новый эндпоинт без явного permission_classes
+    # не станет публичным по недосмотру.
+    'DEFAULT_PERMISSION_CLASSES': (
+        'rest_framework.permissions.IsAuthenticated',
+    ),
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    'DEFAULT_THROTTLE_CLASSES': (
+        'rest_framework.throttling.AnonRateThrottle',
+    ),
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': os.environ.get('THROTTLE_ANON', '120/min'),
+        # Вход по одному номеру телефона без пароля — ограничиваем перебор номеров.
+        'login': os.environ.get('THROTTLE_LOGIN', '10/min'),
+        # Публичная отправка отзыва родителем.
+        'review': os.environ.get('THROTTLE_REVIEW', '20/hour'),
+    },
+    # За nginx REMOTE_ADDR — это адрес прокси, поэтому клиента для троттлинга
+    # определяем по последнему адресу в X-Forwarded-For.
+    'NUM_PROXIES': int(os.environ.get('DJANGO_NUM_PROXIES', 1)),
 }
 
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=int(os.environ.get('JWT_ACCESS_TOKEN_LIFETIME_MINUTES', 60))),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=int(os.environ.get('JWT_REFRESH_TOKEN_LIFETIME_DAYS', 1))),
 }
+
+# Безопасность транспорта. SECURE_SSL_REDIRECT/HSTS включаются отдельным флагом:
+# на тестовом сервере без сертификата их включать нельзя.
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+USE_HTTPS = env_bool('DJANGO_USE_HTTPS', False)
+SECURE_SSL_REDIRECT = USE_HTTPS
+SESSION_COOKIE_SECURE = USE_HTTPS
+CSRF_COOKIE_SECURE = USE_HTTPS
+SESSION_COOKIE_HTTPONLY = True
+SECURE_HSTS_SECONDS = 31536000 if USE_HTTPS else 0
+SECURE_HSTS_INCLUDE_SUBDOMAINS = USE_HTTPS
+SECURE_HSTS_PRELOAD = USE_HTTPS
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = 'same-origin'
+X_FRAME_OPTIONS = 'DENY'
 
 AUTHENTICATION_BACKENDS = [
     'core.auth_backends.PasswordlessAuthBackend',
@@ -151,6 +216,48 @@ CRM_API_URL = os.environ.get('CRM_API_URL', 'https://demo.alfacrm.pro')
 CRM_EMAIL = os.environ.get('CRM_EMAIL', 'test@test.com')
 CRM_API_KEY = os.environ.get('CRM_API_KEY', 'test_key')
 CRM_TOKEN_CACHE_TIMEOUT = int(os.environ.get('CRM_TOKEN_CACHE_TIMEOUT', 3600))
+
+# Логирование: без явной конфигурации сообщения логгеров 'core' и 'app_resume'
+# уходили в lastResort-обработчик и терялись всё, что ниже WARNING.
+LOG_LEVEL = os.environ.get('DJANGO_LOG_LEVEL', 'INFO').upper()
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{asctime} {levelname} {name} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'WARNING',
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console'],
+            'level': LOG_LEVEL,
+            'propagate': False,
+        },
+        'core': {
+            'handlers': ['console'],
+            'level': LOG_LEVEL,
+            'propagate': False,
+        },
+        'app_resume': {
+            'handlers': ['console'],
+            'level': LOG_LEVEL,
+            'propagate': False,
+        },
+    },
+}
 
 SPECTACULAR_SETTINGS = {
     'TITLE': 'KLik API',

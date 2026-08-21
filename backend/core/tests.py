@@ -1,13 +1,17 @@
 from datetime import timedelta
 from unittest.mock import patch
 from django.test import TestCase
+from django.core.cache import cache
 from django.core.management import call_command
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.contrib.auth import authenticate
 from django.utils import timezone
 from rest_framework.test import APIClient
 from rest_framework import status
-from core.models import Branch, Location, Manager, TutorProfile, Group, Employee
+from core.models import (
+    Branch, Location, Manager, TutorProfile, Group, Employee,
+    Student, Resume, ParentReview, normalize_phone,
+)
 from core.serializers import CustomTokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import AccessToken
 
@@ -704,20 +708,534 @@ class EmployeeTestCase(TestCase):
         )
         response = self.client.get(f"/api/employees/{emp.id}/")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIsNotNone(response.data["photo_url"])
-        self.assertTrue(response.data["photo_url"].endswith(f"/api/employees/{emp.id}/photo/"))
+        photo_url = response.data["photo_url"]
+        # photo_url — постоянная ссылка на эндпоинт фотографии, без срока жизни
+        # и без подписи, поэтому её можно кэшировать и подставлять в <img src>.
+        self.assertIsNotNone(photo_url)
+        self.assertTrue(photo_url.endswith(f"/api/employees/{emp.id}/photo/"), photo_url)
+        self.assertNotIn("X-Amz-", photo_url)
 
-        # Проверка эндпоинта фото закомментирована вместе с эндпоинтом
-        # unauth_client = APIClient()
-        # photo_res = unauth_client.get(f"/api/employees/{emp.id}/photo/")
-        # self.assertIn(photo_res.status_code, [status.HTTP_200_OK, status.HTTP_302_FOUND])
-        # no_photo_res = unauth_client.get(f"/api/employees/{self.employee1.id}/photo/")
-        # self.assertEqual(no_photo_res.status_code, status.HTTP_404_NOT_FOUND)
+        # По ссылке действительно отдаётся файл
+        photo_response = self.client.get(f"/api/employees/{emp.id}/photo/")
+        self.assertEqual(photo_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(b"".join(photo_response.streaming_content), b"dummy_content")
 
         # Очистка
         emp.delete()
 
+    def test_employee_photo_available_without_authorization(self):
+        """Ссылка на фото не требует токена — её открывает браузер напрямую."""
+        photo = SimpleUploadedFile("avatar2.jpg", b"dummy_content_2", content_type="image/jpeg")
+        emp = Employee.objects.create(
+            full_name="Петров Пётр",
+            category=Employee.Category.TECHNICAL,
+            position="Инженер",
+            branch=self.branch,
+            photo=photo,
+        )
+        anon = APIClient()
+        response = anon.get(f"/api/employees/{emp.id}/photo/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(b"".join(response.streaming_content), b"dummy_content_2")
+
+        emp.delete()
+
+    def test_employee_photo_missing_returns_404(self):
+        self._auth()
+        response = self.client.get(f"/api/employees/{self.employee2.id}/photo/")
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_employee_without_photo_has_no_photo_url(self):
+        self._auth()
+        response = self.client.get(f"/api/employees/{self.employee2.id}/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNone(response.data["photo_url"])
 
 
+class ResumeScopeTestCase(TestCase):
+    """
+    Резюме можно писать только доступному студенту.
+
+    Раньше student_crm_id не проверялся на область видимости: любой
+    авторизованный тьютор мог создать резюме студенту чужой группы и чужого
+    филиала и заодно выставить ему is_added=True.
+    """
+
+    def setUp(self):
+        self.branch1 = Branch.objects.create(name="Минск", branch_crm_id=1)
+        self.branch2 = Branch.objects.create(name="Гомель", branch_crm_id=2)
+        self.location1 = Location.objects.create(name="Центр", branch=self.branch1)
+
+        self.tutor1 = TutorProfile.objects.create(
+            tutor_name="Тьютор 1", phone_number="375291111111", branch=self.branch1
+        )
+        self.tutor2 = TutorProfile.objects.create(
+            tutor_name="Тьютор 2", phone_number="375292222222", branch=self.branch2
+        )
+        self.manager = Manager.objects.create(
+            name="Менеджер", phone="375293333333", location=self.location1
+        )
+        self.senior = Manager.objects.create(
+            name="Старший", phone="375294444444", location=self.location1, is_senior=True
+        )
+
+        self.group1 = Group.objects.create(
+            crm_group_id="g1", branch=self.branch1, tutor=self.tutor1, name="Группа 1"
+        )
+        self.group2 = Group.objects.create(
+            crm_group_id="g2", branch=self.branch2, tutor=self.tutor2, name="Группа 2"
+        )
+        self.own_student = Student.objects.create(
+            student_crm_id="own", group=self.group1, student_name="Свой", branch=self.branch1
+        )
+        self.foreign_student = Student.objects.create(
+            student_crm_id="foreign", group=self.group2, student_name="Чужой", branch=self.branch2
+        )
+        self.client = APIClient()
+
+    def _auth(self, phone):
+        token = CustomTokenObtainPairSerializer().validate({"phone_number": phone})["access"]
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
+
+    def test_tutor_can_create_resume_for_own_student(self):
+        self._auth("375291111111")
+        response = self.client.post(
+            "/api/resumes/", {"student_crm_id": "own", "content": "Текст"}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.own_student.refresh_from_db()
+        self.assertTrue(self.own_student.is_added)
+
+    def test_tutor_cannot_create_resume_for_foreign_student(self):
+        self._auth("375291111111")
+        response = self.client.post(
+            "/api/resumes/", {"student_crm_id": "foreign", "content": "Текст"}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(Resume.objects.filter(student=self.foreign_student).count(), 0)
+        self.foreign_student.refresh_from_db()
+        self.assertFalse(self.foreign_student.is_added)
+
+    def test_manager_cannot_create_resume_outside_branch(self):
+        self._auth("375293333333")
+        response = self.client.post(
+            "/api/resumes/", {"student_crm_id": "foreign", "content": "Текст"}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_senior_can_create_resume_for_any_student(self):
+        self._auth("375294444444")
+        response = self.client.post(
+            "/api/resumes/", {"student_crm_id": "foreign", "content": "Текст"}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    def test_unknown_and_foreign_student_give_same_error(self):
+        """Ответ не должен подсказывать, существует ли student_crm_id."""
+        self._auth("375291111111")
+        foreign = self.client.post(
+            "/api/resumes/", {"student_crm_id": "foreign", "content": "x"}, format="json"
+        )
+        unknown = self.client.post(
+            "/api/resumes/", {"student_crm_id": "no-such-id", "content": "x"}, format="json"
+        )
+        self.assertEqual(foreign.status_code, unknown.status_code)
+        self.assertEqual(foreign.data["student_crm_id"], unknown.data["student_crm_id"])
+
+    def test_update_keeps_student_and_does_not_require_crm_id(self):
+        resume = Resume.objects.create(student=self.own_student, content="Старый")
+        self._auth("375291111111")
+        response = self.client.put(
+            f"/api/resumes/{resume.id}/", {"content": "Новый"}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        resume.refresh_from_db()
+        self.assertEqual(resume.content, "Новый")
+        self.assertEqual(resume.student_id, self.own_student.id)
+
+    def test_resume_requires_authentication(self):
+        response = self.client.post(
+            "/api/resumes/", {"student_crm_id": "own", "content": "x"}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
 
+class GroupCountersTestCase(TestCase):
+    """Счётчики группы должны совпадать с полем is_verified у студентов."""
+
+    def setUp(self):
+        self.branch = Branch.objects.create(name="Минск", branch_crm_id=1)
+        self.tutor = TutorProfile.objects.create(
+            tutor_name="Тьютор", phone_number="375291111111", branch=self.branch
+        )
+        self.group = Group.objects.create(
+            crm_group_id="g1", branch=self.branch, tutor=self.tutor, name="Группа"
+        )
+        self.client = APIClient()
+        token = CustomTokenObtainPairSerializer().validate(
+            {"phone_number": "375291111111"}
+        )["access"]
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
+
+    def _group_row(self):
+        response = self.client.get("/api/groups/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        return response.data["results"][0]
+
+    def test_student_marked_added_without_resumes_is_not_verified(self):
+        Student.objects.create(
+            student_crm_id="s1", group=self.group, student_name="Студент",
+            branch=self.branch, is_added=True,
+        )
+        row = self._group_row()
+        self.assertEqual(row["total_students"], 1)
+        self.assertEqual(row["resumes_written_count"], 1)
+        self.assertEqual(row["resumes_verified_count"], 0)
+
+    def test_verified_counter_matches_student_flag(self):
+        verified = Student.objects.create(
+            student_crm_id="s1", group=self.group, student_name="Проверенный",
+            branch=self.branch, is_added=True,
+        )
+        Resume.objects.create(student=verified, content="a", is_verified=True)
+        Resume.objects.create(student=verified, content="b", is_verified=True)
+
+        partial = Student.objects.create(
+            student_crm_id="s2", group=self.group, student_name="Частично",
+            branch=self.branch, is_added=True,
+        )
+        Resume.objects.create(student=partial, content="a", is_verified=True)
+        Resume.objects.create(student=partial, content="b", is_verified=False)
+
+        row = self._group_row()
+        self.assertEqual(row["total_students"], 2)
+        self.assertEqual(row["resumes_written_count"], 2)
+        self.assertEqual(row["resumes_verified_count"], 1)
+
+        clients = self.client.get(f"/api/groups/{self.group.id}/clients/")
+        flags = {item["student_crm_id"]: item["is_verified"] for item in clients.data}
+        self.assertEqual(flags, {"s1": True, "s2": False})
+
+
+class StudentQueryCountTestCase(TestCase):
+    """Список студентов не должен делать по запросу на каждого студента."""
+
+    def setUp(self):
+        self.branch = Branch.objects.create(name="Минск", branch_crm_id=1)
+        self.tutor = TutorProfile.objects.create(
+            tutor_name="Тьютор", phone_number="375291111111", branch=self.branch
+        )
+        self.group = Group.objects.create(
+            crm_group_id="g1", branch=self.branch, tutor=self.tutor, name="Группа"
+        )
+        for i in range(10):
+            student = Student.objects.create(
+                student_crm_id=f"s{i}", group=self.group,
+                student_name=f"Студент {i}", branch=self.branch, is_added=True,
+            )
+            Resume.objects.create(student=student, content="x", is_verified=i % 2 == 0)
+            ParentReview.objects.create(student=student, content="отзыв")
+
+        self.client = APIClient()
+        token = CustomTokenObtainPairSerializer().validate(
+            {"phone_number": "375291111111"}
+        )["access"]
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
+
+    def test_student_list_query_count_does_not_grow_with_rows(self):
+        with self.assertNumQueries(3):
+            response = self.client.get("/api/clients/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data["results"]), 10)
+
+    def test_student_list_stays_ordered_for_pagination(self):
+        """Агрегаты не должны сбрасывать сортировку — иначе страницы поедут."""
+        from core.models import Student as StudentModel
+        from core.serializers import annotate_student_flags
+
+        self.assertTrue(annotate_student_flags(StudentModel.objects.all()).ordered)
+
+        first = self.client.get("/api/clients/?size=5").data["results"]
+        second = self.client.get("/api/clients/?size=5&page=2").data["results"]
+        names = [item["student_name"] for item in first + second]
+        self.assertEqual(names, sorted(names))
+        self.assertEqual(len(set(names)), 10)
+
+    def test_annotated_flags_match_relations(self):
+        response = self.client.get("/api/clients/")
+        by_id = {item["student_crm_id"]: item for item in response.data["results"]}
+        self.assertTrue(by_id["s0"]["is_verified"])
+        self.assertFalse(by_id["s1"]["is_verified"])
+        self.assertTrue(by_id["s0"]["is_review_exist"])
+
+    def test_stale_review_does_not_count(self):
+        student = Student.objects.create(
+            student_crm_id="old", group=self.group,
+            student_name="Со старым отзывом", branch=self.branch,
+        )
+        review = ParentReview.objects.create(student=student, content="давний")
+        ParentReview.objects.filter(pk=review.pk).update(
+            created_at=timezone.now() - timedelta(days=61)
+        )
+        response = self.client.get("/api/clients/")
+        by_id = {item["student_crm_id"]: item for item in response.data["results"]}
+        self.assertFalse(by_id["old"]["is_review_exist"])
+
+
+class ModuleAccessQueryCountTestCase(TestCase):
+    """Проверка доступа к модулям — один запрос на всю выдачу, а не на модуль."""
+
+    def setUp(self):
+        from core.models import Category, Subcategory, Module, TutorModule
+
+        self.branch = Branch.objects.create(name="Минск", branch_crm_id=1)
+        self.tutor = TutorProfile.objects.create(
+            tutor_name="Тьютор", phone_number="375291111111", branch=self.branch
+        )
+        self.senior = TutorProfile.objects.create(
+            tutor_name="Старший", phone_number="375292222222",
+            branch=self.branch, is_senior=True,
+        )
+        category = Category.objects.create(name="Категория")
+        subcategory = Subcategory.objects.create(name="Подкатегория", category=category)
+        self.modules = [
+            Module.objects.create(name=f"Модуль {i}", subcategory=subcategory)
+            for i in range(6)
+        ]
+        # Доступ только к первым двум модулям
+        for module in self.modules[:2]:
+            TutorModule.objects.create(
+                tutor=self.tutor, module=module,
+                expires_at=timezone.now() + timedelta(days=3),
+            )
+        # Просроченный доступ к третьему — не должен учитываться
+        TutorModule.objects.create(
+            tutor=self.tutor, module=self.modules[2],
+            expires_at=timezone.now() - timedelta(days=1),
+        )
+        self.client = APIClient()
+
+    def _auth(self, phone):
+        token = CustomTokenObtainPairSerializer().validate({"phone_number": phone})["access"]
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
+
+    def test_module_list_accessibility_flags(self):
+        self._auth("375291111111")
+        response = self.client.get("/api/modules/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        flags = {item["name"]: item["is_accessible"] for item in response.data}
+        self.assertTrue(flags["Модуль 0"])
+        self.assertTrue(flags["Модуль 1"])
+        self.assertFalse(flags["Модуль 2"])
+        self.assertFalse(flags["Модуль 5"])
+
+    def test_module_list_query_count_does_not_grow_with_modules(self):
+        """Число запросов не должно зависеть от количества модулей."""
+        from django.test.utils import CaptureQueriesContext
+        from django.db import connection
+        from core.models import Module
+
+        self._auth("375291111111")
+
+        with CaptureQueriesContext(connection) as few:
+            self.client.get("/api/modules/")
+
+        subcategory = self.modules[0].subcategory
+        for i in range(20):
+            Module.objects.create(name=f"Ещё модуль {i}", subcategory=subcategory)
+
+        with CaptureQueriesContext(connection) as many:
+            response = self.client.get("/api/modules/")
+
+        self.assertEqual(len(response.data), 26)
+        self.assertEqual(len(many), len(few))
+
+    def test_senior_tutor_sees_all_modules_accessible(self):
+        self._auth("375292222222")
+        response = self.client.get("/api/modules/")
+        self.assertTrue(all(item["is_accessible"] for item in response.data))
+
+
+class LocationFilterTestCase(TestCase):
+    """Нечисловой branch_id должен давать 400, а не 500."""
+
+    def setUp(self):
+        self.branch = Branch.objects.create(name="Минск", branch_crm_id=1)
+        self.location = Location.objects.create(name="Центр", branch=self.branch)
+        self.manager = Manager.objects.create(
+            name="Менеджер", phone="375291111111", location=self.location
+        )
+        self.client = APIClient()
+        token = CustomTokenObtainPairSerializer().validate(
+            {"phone_number": "375291111111"}
+        )["access"]
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
+
+    def test_invalid_branch_id_returns_400(self):
+        response = self.client.get("/api/locations/?branch_id=abc")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_valid_branch_id_filters(self):
+        response = self.client.get(f"/api/locations/?branch_id={self.branch.id}")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+
+    def test_unknown_branch_id_returns_empty(self):
+        response = self.client.get("/api/locations/?branch_id=999999")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data, [])
+
+
+class ThrottlingTestCase(TestCase):
+    """
+    Вход беспарольный, а отправка отзыва вообще не требует авторизации,
+    поэтому оба эндпоинта должны ограничивать частоту запросов.
+    """
+
+    def setUp(self):
+        cache.clear()
+        self.branch = Branch.objects.create(name="Минск", branch_crm_id=1)
+        self.tutor = TutorProfile.objects.create(
+            tutor_name="Тьютор", phone_number="375291111111", branch=self.branch
+        )
+        self.group = Group.objects.create(
+            crm_group_id="g1", branch=self.branch, tutor=self.tutor, name="Группа"
+        )
+        self.student = Student.objects.create(
+            student_crm_id="s1", group=self.group, student_name="Студент", branch=self.branch
+        )
+        self.client = APIClient()
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_login_attempts_are_throttled(self):
+        statuses = [
+            self.client.post(
+                "/api/auth/login/", {"phone_number": f"37529000{i:04d}"}, format="json"
+            ).status_code
+            for i in range(15)
+        ]
+        self.assertIn(status.HTTP_429_TOO_MANY_REQUESTS, statuses)
+
+    def test_successful_login_still_works_within_limit(self):
+        response = self.client.post(
+            "/api/auth/login/", {"phone_number": "375291111111"}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", response.data)
+
+    def test_public_review_creation_is_throttled(self):
+        statuses = [
+            self.client.post(
+                "/api/reviews/", {"student_crm_id": "s1", "content": "отзыв"}, format="json"
+            ).status_code
+            for i in range(25)
+        ]
+        self.assertIn(status.HTTP_201_CREATED, statuses)
+        self.assertIn(status.HTTP_429_TOO_MANY_REQUESTS, statuses)
+
+    def test_review_content_length_is_limited(self):
+        response = self.client.post(
+            "/api/reviews/",
+            {"student_crm_id": "s1", "content": "я" * 5001},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class PhoneNormalizationTestCase(TestCase):
+    """
+    Телефон хранится только цифрами. Иначе менеджер, заведённый в админке
+    как '+375 (29) 123-45-67', не смог бы войти по своему номеру.
+    """
+
+    def setUp(self):
+        self.branch = Branch.objects.create(name="Минск", branch_crm_id=1)
+        self.location = Location.objects.create(name="Центр", branch=self.branch)
+        self.client = APIClient()
+
+    def test_normalize_phone_helper(self):
+        self.assertEqual(normalize_phone("+375 (29) 123-45-67"), "375291234567")
+        self.assertEqual(normalize_phone("375291234567"), "375291234567")
+        self.assertIsNone(normalize_phone(None))
+        # Без цифр значение не затирается
+        self.assertEqual(normalize_phone("нет цифр"), "нет цифр")
+
+    def test_manager_phone_normalized_on_save(self):
+        manager = Manager.objects.create(
+            name="Менеджер", phone="+375 (29) 123-45-67", location=self.location
+        )
+        manager.refresh_from_db()
+        self.assertEqual(manager.phone, "375291234567")
+
+    def test_tutor_phone_normalized_on_save(self):
+        tutor = TutorProfile.objects.create(
+            tutor_name="Тьютор", phone_number="+375 33 765-43-21", branch=self.branch
+        )
+        tutor.refresh_from_db()
+        self.assertEqual(tutor.phone_number, "375337654321")
+
+    def test_login_with_formatted_phone(self):
+        Manager.objects.create(
+            name="Менеджер", phone="+375 (29) 123-45-67", location=self.location
+        )
+        cache.clear()
+        response = self.client.post(
+            "/api/auth/login/", {"phone_number": "+375 (29) 123-45-67"}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        cache.clear()
+
+
+class DefaultPermissionTestCase(TestCase):
+    """Эндпоинты закрыты по умолчанию — кроме сознательно публичных."""
+
+    def setUp(self):
+        cache.clear()
+        self.branch = Branch.objects.create(name="Минск", branch_crm_id=1)
+        self.tutor = TutorProfile.objects.create(
+            tutor_name="Тьютор", phone_number="375291111111", branch=self.branch
+        )
+        self.group = Group.objects.create(
+            crm_group_id="g1", branch=self.branch, tutor=self.tutor, name="Группа"
+        )
+        self.student = Student.objects.create(
+            student_crm_id="s1", group=self.group, student_name="Студент", branch=self.branch
+        )
+        self.client = APIClient()
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_data_endpoints_require_token(self):
+        for url in (
+            "/api/groups/",
+            "/api/clients/",
+            "/api/resumes/",
+            "/api/news/",
+            "/api/categories/",
+            "/api/modules/",
+            "/api/branches/",
+            "/api/locations/",
+            "/api/employees/",
+            "/api/profile/detail/",
+            f"/api/reviews/{self.student.student_crm_id}/",
+        ):
+            with self.subTest(url=url):
+                response = self.client.get(url)
+                self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_public_endpoints_stay_public(self):
+        login = self.client.post(
+            "/api/auth/login/", {"phone_number": "375291111111"}, format="json"
+        )
+        self.assertEqual(login.status_code, status.HTTP_200_OK)
+
+        review = self.client.post(
+            "/api/reviews/", {"student_crm_id": "s1", "content": "отзыв"}, format="json"
+        )
+        self.assertEqual(review.status_code, status.HTTP_201_CREATED)
+
+        schema = self.client.get("/api/schema/")
+        self.assertEqual(schema.status_code, status.HTTP_200_OK)

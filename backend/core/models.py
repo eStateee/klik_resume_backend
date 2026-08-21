@@ -1,6 +1,24 @@
 from django.db import models
 
 
+def normalize_phone(raw):
+    """
+    Приводит номер телефона к формату хранения — только цифры.
+
+    Один формат нужен и для синхронизации из CRM (там телефон уже чистится),
+    и для ручного ввода в админке, и для логина: без нормализации номер,
+    введённый как '+375 (29) 123-45-67', никогда не совпадёт с сохранённым
+    '375291234567', и пользователь просто не сможет войти.
+
+    Если цифр в значении нет, возвращает его без изменений — чтобы не затирать
+    данные молча.
+    """
+    if not raw:
+        return raw
+    digits = "".join(ch for ch in str(raw) if ch.isdigit())
+    return digits or raw
+
+
 class Branch(models.Model):
     name = models.CharField(max_length=255, verbose_name="Название")
     branch_crm_id = models.IntegerField(unique=True, verbose_name="ID филиала в CRM")
@@ -65,6 +83,10 @@ class TutorProfile(AuthenticatedModelMixin, models.Model):
     note = models.TextField(null=True, blank=True, verbose_name="Заметка")
     avatar_url = models.CharField(max_length=500, null=True, blank=True, verbose_name="URL аватара")
 
+    def save(self, *args, **kwargs):
+        self.phone_number = normalize_phone(self.phone_number)
+        return super().save(*args, **kwargs)
+
     def __str__(self):
         return self.tutor_name
 
@@ -85,6 +107,10 @@ class Manager(AuthenticatedModelMixin, models.Model):
     )
     phone = models.CharField(max_length=50, unique=True, verbose_name="Уникальный телефон")
     is_senior = models.BooleanField(default=False, verbose_name="Старший менеджер")
+
+    def save(self, *args, **kwargs):
+        self.phone = normalize_phone(self.phone)
+        return super().save(*args, **kwargs)
 
     def __str__(self):
         return self.name

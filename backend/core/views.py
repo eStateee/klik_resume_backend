@@ -1,14 +1,16 @@
 import logging
-from django.conf import settings
-from django.http import HttpResponseRedirect, FileResponse
+
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework import viewsets, status
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.exceptions import ValidationError
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from django.conf import settings
 from django.db.models import Count, Q, Subquery, OuterRef
 from django.db.models.functions import Coalesce
+from django.http import FileResponse, HttpResponseRedirect
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 from drf_spectacular.types import OpenApiTypes
 
@@ -19,15 +21,20 @@ from .serializers import (
     ParentReviewSerializer, NewsSerializer, CategorySerializer,
     CategoryListSerializer, ModuleSerializer, ModuleListSerializer,
     BranchSerializer, LocationSerializer, EmployeeSerializer,
-    accessible_module_ids, is_privileged_viewer, resolve_viewer,
-    generate_presigned_url
+    accessible_module_ids, annotate_student_flags, generate_presigned_url,
+    is_privileged_viewer, resolve_viewer
 )
 from .permissions import IsTutor, IsManager, IsSeniorTutorOrManager
 from .pagination import StandardResultsSetPagination
+from .throttling import LoginRateThrottle, ParentReviewCreateThrottle
+
+logger = logging.getLogger("core")
 
 
 class PasswordlessLoginView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
+    # Вход беспарольный, поэтому перебор номеров телефона ограничиваем по IP
+    throttle_classes = [LoginRateThrottle]
 
 
 @extend_schema(
@@ -104,16 +111,20 @@ class GroupViewSet(viewsets.ReadOnlyModelViewSet):
         elif role == 'manager':
             qs = Group.objects.filter(branch_id=branch_id)
         
-        # Подзапрос: кол-во студентов, у которых ВСЕ резюме проверены
+        # Подзапрос: кол-во студентов, у которых есть резюме и ВСЕ они проверены.
+        # Условие resumes__isnull=False обязательно: без него студент с
+        # is_added=True и без резюме тоже попадал в «проверенные», хотя
+        # StudentSerializer.is_verified для него возвращает False.
         verified_subq = (
             Student.objects.filter(
                 group=OuterRef('pk'),
                 is_added=True,
+                resumes__isnull=False,
             )
             .exclude(resumes__is_verified=False)
             .order_by()
             .values('group')
-            .annotate(cnt=Count('id'))
+            .annotate(cnt=Count('id', distinct=True))
             .values('cnt')
         )
 
@@ -144,8 +155,8 @@ class GroupViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=['get'])
     def clients(self, request, pk=None):
         group = self.get_object()
-        students = group.students.select_related('group').all()
-        serializer = StudentSerializer(students, many=True)
+        students = annotate_student_flags(group.students.select_related('group'))
+        serializer = StudentSerializer(students, many=True, context=self.get_serializer_context())
         return Response(serializer.data)
 
 
@@ -164,14 +175,16 @@ class StudentViewSet(viewsets.ReadOnlyModelViewSet):
         branch_id = auth.get('branch_id')
         is_senior = auth.get('is_senior')
         
+        qs = annotate_student_flags(Student.objects.select_related('group'))
+
         if is_senior:
-            return Student.objects.select_related('group').all()
+            return qs
         elif role == 'tutor':
-            return Student.objects.select_related('group').filter(group__tutor_id=user_id)
+            return qs.filter(group__tutor_id=user_id)
         elif role == 'manager':
-            return Student.objects.select_related('group').filter(branch_id=branch_id)
-            
-        return Student.objects.select_related('group').none()
+            return qs.filter(branch_id=branch_id)
+
+        return qs.none()
 
     @extend_schema(
         summary="Получить список студентов",
@@ -257,8 +270,14 @@ class ParentReviewViewSet(viewsets.ModelViewSet):
     
     def get_permissions(self):
         if self.action == 'create':
+            # Отзыв оставляет родитель — без входа в систему
             return []
         return [IsAuthenticated()]
+
+    def get_throttles(self):
+        if self.action == 'create':
+            return [ParentReviewCreateThrottle()]
+        return super().get_throttles()
 
     def get_queryset(self):
         qs = ParentReview.objects.none()
@@ -390,7 +409,7 @@ class ModuleViewSet(viewsets.ReadOnlyModelViewSet):
     def my(self, request):
         role, user_id, is_senior = resolve_viewer(request)
 
-        qs = Module.objects.filter(is_active=True)
+        qs = Module.objects.filter(is_active=True).prefetch_related("lessons")
         if not is_privileged_viewer(role, is_senior):
             qs = qs.filter(id__in=accessible_module_ids(user_id))
 
@@ -415,10 +434,19 @@ class LocationViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
+        qs = Location.objects.filter(is_active=True)
+
         branch_id = self.request.query_params.get("branch_id")
-        if branch_id is not None:
-            return Location.objects.filter(is_active=True, branch_id=branch_id)
-        return Location.objects.filter(is_active=True)
+        if branch_id is None:
+            return qs
+
+        # Без проверки нечисловой branch_id доходил до ORM и давал 500
+        try:
+            branch_id = int(branch_id)
+        except (TypeError, ValueError):
+            raise ValidationError({"branch_id": "Должен быть целым числом."})
+
+        return qs.filter(branch_id=branch_id)
 
     @extend_schema(
         summary="Получить весь список локаций или список локаций конкретного филиала",
@@ -488,50 +516,65 @@ class EmployeeViewSet(viewsets.ReadOnlyModelViewSet):
     def retrieve(self, request, *args, **kwargs):
         return super().retrieve(request, *args, **kwargs)
 
-    # Временно скрыто: эндпоинт получения фото сотрудника
-    # @extend_schema(
-    #     summary="Получить фотографию сотрудника",
-    #     description="Возвращает файл фотографии сотрудника или перенаправляет на актуальный файл в хранилище.",
-    #     parameters=[
-    #         OpenApiParameter(
-    #             name="id",
-    #             type=OpenApiTypes.INT,
-    #             location=OpenApiParameter.PATH,
-    #             description="ID сотрудника",
-    #         )
-    #     ],
-    #     responses={200: bytes, 404: dict},
-    # )
-    # @action(detail=True, methods=["get"], permission_classes=[])
-    # def photo(self, request, pk=None):
-    #     employee = self.get_object()
-    #     if not employee.photo or not employee.photo.name:
-    #         return Response(
-    #             {"detail": "У сотрудника нет фотографии."},
-    #             status=status.HTTP_404_NOT_FOUND,
-    #         )
-    #
-    #     if getattr(settings, "AWS_ACCESS_KEY_ID", None) and getattr(
-    #         settings, "AWS_SECRET_ACCESS_KEY", None
-    #     ):
-    #         try:
-    #             s3_url = generate_presigned_url(employee.photo, expires_in=900)
-    #             if s3_url:
-    #                 return HttpResponseRedirect(s3_url)
-    #         except Exception as exc:
-    #             logging.getLogger("core").error(
-    #                 "Ошибка получения photo S3 URL для Employee id=%s: %s",
-    #                 employee.pk,
-    #                 exc,
-    #             )
-    #
-    #     try:
-    #         return FileResponse(employee.photo.open("rb"))
-    #     except FileNotFoundError:
-    #         return Response(
-    #             {"detail": "Файл фотографии не найден."},
-    #             status=status.HTTP_404_NOT_FOUND,
-    #         )
+    @extend_schema(
+        summary="Получить фотографию сотрудника",
+        description=(
+            "Отдаёт фотографию сотрудника. Ссылка постоянная и не требует "
+            "авторизации — её можно подставлять прямо в `<img src>` и кэшировать; "
+            "именно этот адрес возвращается в поле `photo_url`.\n\n"
+            "Если файл лежит в S3, ответ — редирект на файл в хранилище, "
+            "иначе файл отдаётся напрямую."
+        ),
+        responses={(200, "image/*"): OpenApiTypes.BINARY},
+    )
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path="photo",
+        # Ссылка публичная и постоянная: фото сотрудника не закрытые данные.
+        # authentication_classes=[] — просроченный токен в заголовке не должен
+        # ломать загрузку картинки; throttle_classes=[] — на странице со
+        # списком сотрудников таких запросов сразу десятки.
+        permission_classes=[AllowAny],
+        authentication_classes=[],
+        throttle_classes=[],
+    )
+    def photo(self, request, pk=None):
+        employee = self.get_object()
+        if not employee.photo or not employee.photo.name:
+            return Response(
+                {"detail": "У сотрудника нет фотографии."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
 
+        if getattr(settings, "AWS_ACCESS_KEY_ID", None) and getattr(
+            settings, "AWS_SECRET_ACCESS_KEY", None
+        ):
+            try:
+                # Подпись живёт час, а max-age редиректа заметно меньше —
+                # браузер не закэширует ссылку дольше её срока действия.
+                s3_url = generate_presigned_url(employee.photo, expires_in=3600)
+                if s3_url:
+                    response = HttpResponseRedirect(s3_url)
+                    response["Cache-Control"] = "public, max-age=1800"
+                    return response
+            except Exception as exc:
+                logger.error(
+                    "Ошибка получения photo S3 URL для Employee id=%s: %s",
+                    employee.pk,
+                    exc,
+                )
 
+        try:
+            response = FileResponse(employee.photo.open("rb"))
+        except OSError as exc:  # включает FileNotFoundError
+            logger.error(
+                "Файл фотографии недоступен для Employee id=%s: %s", employee.pk, exc
+            )
+            return Response(
+                {"detail": "Файл фотографии не найден."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
 
+        response["Cache-Control"] = "public, max-age=1800"
+        return response

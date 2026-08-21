@@ -1,11 +1,14 @@
 import logging
+from datetime import timedelta
 
 import boto3
 from botocore.config import Config as BotoConfig
 from botocore.exceptions import BotoCoreError, ClientError
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
+from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
+from django.urls import reverse
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
@@ -34,9 +37,15 @@ from .models import (
     Subcategory,
     TutorModule,
     TutorProfile,
+    normalize_phone,
 )
 
 logger = logging.getLogger("core")
+
+# Отзыв считается актуальным столько дней
+REVIEW_FRESHNESS_DAYS = 60
+# Ограничение длины публично отправляемого отзыва родителя
+PARENT_REVIEW_MAX_LENGTH = 5000
 
 
 # ---------------------------------------------------------------------------
@@ -75,10 +84,9 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         self.fields["phone_number"] = serializers.CharField()
 
     def validate(self, attrs):
-        phone_number = attrs.get("phone_number", "")
-
-        # Очищаем телефон от всего кроме цифр
-        phone_number = "".join(filter(str.isdigit, phone_number))
+        # Телефон приводим к тому же виду, в котором он хранится в БД
+        # (только цифры) — см. normalize_phone в core.models
+        phone_number = normalize_phone(attrs.get("phone_number", ""))
 
         from django.contrib.auth import authenticate
 
@@ -258,6 +266,61 @@ def accessible_module_ids(tutor_id):
 
 
 # ---------------------------------------------------------------------------
+# Область видимости студентов
+# ---------------------------------------------------------------------------
+
+
+def visible_students(request):
+    """
+    Queryset студентов, доступных владельцу токена. Те же три уровня видимости,
+    что и в StudentViewSet:
+    - старший тьютор / старший менеджер — все студенты;
+    - менеджер — студенты своего филиала;
+    - тьютор — студенты своих групп.
+
+    Используется и для чтения, и для проверки прав на запись (резюме),
+    чтобы правила видимости не расходились между эндпоинтами.
+    """
+    auth = getattr(request, "auth", None) if request is not None else None
+    if not auth:
+        return Student.objects.none()
+
+    if auth.get("is_senior"):
+        return Student.objects.all()
+
+    role = auth.get("role")
+    if role == "tutor":
+        return Student.objects.filter(group__tutor_id=auth.get("user_id"))
+    if role == "manager":
+        return Student.objects.filter(branch_id=auth.get("branch_id"))
+
+    return Student.objects.none()
+
+
+def annotate_student_flags(queryset):
+    """
+    Добавляет к queryset студентов счётчики для полей is_verified и
+    is_review_exist. Без этих аннотаций StudentSerializer делает по два
+    отдельных запроса на каждого студента (N+1).
+    """
+    review_threshold = timezone.now() - timedelta(days=REVIEW_FRESHNESS_DAYS)
+    return queryset.annotate(
+        resumes_total=Count("resumes", distinct=True),
+        resumes_unverified=Count(
+            "resumes", filter=Q(resumes__is_verified=False), distinct=True
+        ),
+        recent_reviews_total=Count(
+            "parent_reviews",
+            filter=Q(parent_reviews__created_at__gte=review_threshold),
+            distinct=True,
+        ),
+    # Агрегаты добавляют GROUP BY, из-за которого Django сбрасывает
+    # Meta.ordering — без явной сортировки пагинация выдавала бы страницы
+    # в непредсказуемом порядке.
+    ).order_by("student_name", "pk")
+
+
+# ---------------------------------------------------------------------------
 # Сериализаторы данных
 # ---------------------------------------------------------------------------
 
@@ -291,17 +354,23 @@ class StudentSerializer(serializers.ModelSerializer):
     @extend_schema_field(serializers.BooleanField())
     def get_is_verified(self, obj):
         """Возвращает True, если у студента есть резюме и все они проверены."""
-        resumes = obj.resumes.all()
-        if not resumes.exists():
-            return False
-        return not resumes.filter(is_verified=False).exists()
+        total = getattr(obj, "resumes_total", None)
+        if total is None:
+            # Queryset без annotate_student_flags — считаем по связям
+            resumes = obj.resumes.all()
+            if not resumes.exists():
+                return False
+            return not resumes.filter(is_verified=False).exists()
+        return total > 0 and getattr(obj, "resumes_unverified", 0) == 0
 
     @extend_schema_field(serializers.BooleanField())
     def get_is_review_exist(self, obj):
         """Возвращает True, если у студента есть хотя бы один отзыв за последние 60 дней."""
-        from datetime import timedelta
-        threshold = timezone.now() - timedelta(days=60)
-        return obj.parent_reviews.filter(created_at__gte=threshold).exists()
+        recent = getattr(obj, "recent_reviews_total", None)
+        if recent is None:
+            threshold = timezone.now() - timedelta(days=REVIEW_FRESHNESS_DAYS)
+            return obj.parent_reviews.filter(created_at__gte=threshold).exists()
+        return recent > 0
 
     @extend_schema_field(serializers.CharField(allow_null=True))
     def get_group_name(self, obj):
@@ -312,7 +381,8 @@ class StudentSerializer(serializers.ModelSerializer):
 
 
 class ResumeSerializer(serializers.ModelSerializer):
-    student_crm_id = serializers.CharField(write_only=True)
+    # На обновлении студента у резюме не меняем, поэтому поле не обязательное
+    student_crm_id = serializers.CharField(write_only=True, required=False)
     student = serializers.PrimaryKeyRelatedField(read_only=True)
 
     class Meta:
@@ -320,21 +390,52 @@ class ResumeSerializer(serializers.ModelSerializer):
         fields = ["id", "student", "student_crm_id", "content", "is_verified", "created_at", "updated_at"]
         read_only_fields = ["is_verified", "created_at", "updated_at", "student"]
 
+    def validate_student_crm_id(self, value):
+        """
+        Резюме можно писать только студенту, который доступен владельцу токена.
+        Без этой проверки любой авторизованный тьютор мог создать резюме
+        студенту чужой группы и чужого филиала, передав его student_crm_id.
+
+        Сообщение одинаково и для несуществующего, и для недоступного студента —
+        чтобы эндпоинт не работал как способ перебрать student_crm_id.
+        """
+        request = self.context.get("request")
+        if not visible_students(request).filter(student_crm_id=value).exists():
+            raise serializers.ValidationError("Студент не найден или недоступен.")
+        return value
+
+    def validate(self, attrs):
+        if self.instance is None and not attrs.get("student_crm_id"):
+            raise serializers.ValidationError(
+                {"student_crm_id": "Обязательное поле."}
+            )
+        return attrs
+
     def create(self, validated_data):
         student_crm_id = validated_data.pop("student_crm_id")
-        student = get_object_or_404(Student, student_crm_id=student_crm_id)
+        request = self.context.get("request")
+        student = get_object_or_404(
+            visible_students(request), student_crm_id=student_crm_id
+        )
         validated_data["student"] = student
-        
+
         if not student.is_added:
             student.is_added = True
             student.save(update_fields=['is_added'])
-            
+
         return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        # Привязку к студенту у существующего резюме не меняем
+        validated_data.pop("student_crm_id", None)
+        return super().update(instance, validated_data)
 
 
 class ParentReviewSerializer(serializers.ModelSerializer):
-    student_crm_id = serializers.CharField(write_only=True)
+    student_crm_id = serializers.CharField(write_only=True, max_length=100)
     student = serializers.PrimaryKeyRelatedField(read_only=True)
+    # Эндпоинт создания отзыва публичный, поэтому длину текста ограничиваем
+    content = serializers.CharField(max_length=PARENT_REVIEW_MAX_LENGTH)
 
     class Meta:
         model = ParentReview
@@ -386,32 +487,36 @@ class ModuleListSerializer(serializers.ModelSerializer):
         model = Module
         fields = ["id", "name", "validity_period", "is_active", "is_accessible"]
 
-    def _check_tutor_access(self, obj) -> bool:
+    # Признак полного доступа в кэше контекста
+    FULL_ACCESS = object()
+
+    def _accessible_ids(self):
         """
-        Проверяет наличие доступа к модулю у текущего пользователя.
-        Менеджер и старший тьютор — полный доступ; обычному тьютору нужен
-        активный (непросроченный) TutorModule.
+        ID доступных модулей, посчитанные один раз на всю сериализацию.
+        Менеджер и старший тьютор — полный доступ (FULL_ACCESS); обычному
+        тьютору нужен активный (непросроченный) TutorModule.
+
+        Раньше доступ проверялся отдельным запросом на каждый модуль, что при
+        выдаче категорий с модулями давало N+1.
         """
-        role, user_id, is_senior = resolve_viewer(self.context.get("request"))
+        cache_key = "_accessible_module_ids"
+        if cache_key not in self.context:
+            role, user_id, is_senior = resolve_viewer(self.context.get("request"))
 
-        if is_privileged_viewer(role, is_senior):
-            return True
+            if is_privileged_viewer(role, is_senior):
+                self.context[cache_key] = self.FULL_ACCESS
+            elif role == "tutor":
+                self.context[cache_key] = set(accessible_module_ids(user_id))
+            else:
+                self.context[cache_key] = set()
 
-        if role != "tutor":
-            return False
-
-        return TutorModule.objects.filter(
-            tutor_id=user_id,
-            module=obj,
-            expires_at__gt=timezone.now(),
-        ).exists()
+        return self.context[cache_key]
 
     def get_is_accessible(self, obj) -> bool:
-        # Кэшируем результат в контексте, чтобы не делать повторный запрос в get_lessons
-        cache_key = f"_accessible_{obj.pk}"
-        if cache_key not in self.context:
-            self.context[cache_key] = self._check_tutor_access(obj)
-        return self.context[cache_key]
+        accessible = self._accessible_ids()
+        if accessible is self.FULL_ACCESS:
+            return True
+        return obj.pk in accessible
 
 
 class ModuleSerializer(ModuleListSerializer):
@@ -518,13 +623,18 @@ class EmployeeSerializer(serializers.ModelSerializer):
 
     @extend_schema_field(serializers.CharField(allow_null=True))
     def get_photo_url(self, obj) -> str | None:
+        """
+        Постоянная ссылка на фотографию сотрудника — эндпоинт
+        `GET /api/employees/{id}/photo/`. Ссылка не протухает и не требует
+        авторизации: фото сотрудника не считается закрытыми данными.
+        Возвращает None, если фотографии нет.
+        """
         if not obj.photo or not obj.photo.name:
             return None
-        path = f"/api/employees/{obj.id}/photo/"
+
+        url = reverse("employee-photo", kwargs={"pk": obj.pk})
+
         request = self.context.get("request")
         if request is not None:
-            return request.build_absolute_uri(path)
-        return path
-
-
-
+            return request.build_absolute_uri(url)
+        return url
