@@ -120,9 +120,13 @@ TIME_ZONE = 'Europe/Minsk'
 USE_I18N = True
 USE_TZ = True
 
-STATIC_URL = 'static/'
+# Префиксы статики/медиа вынесены в окружение: на продакшене фронтенд (CRA)
+# занимает /static/ своими бандлами, поэтому статика Django отдаётся с
+# отдельного префикса (DJANGO_STATIC_URL=/django-static/). Значение должно
+# совпадать с соответствующим location в конфиге nginx.
+STATIC_URL = os.environ.get('DJANGO_STATIC_URL', 'static/')
 STATIC_ROOT = BASE_DIR / 'static'
-MEDIA_URL = 'media/'
+MEDIA_URL = os.environ.get('DJANGO_MEDIA_URL', 'media/')
 MEDIA_ROOT = BASE_DIR / 'media'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
