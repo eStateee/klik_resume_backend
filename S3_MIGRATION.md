@@ -152,9 +152,9 @@ The endpoint `GET /api/modules/` returns modules with nested lessons:
 
 ### Key Points for Frontend Developers
 
-#### 1. URLs are temporary (15 minutes)
+#### 1. URLs are temporary (60 minutes)
 
-Pre-signed URLs expire after **900 seconds (15 minutes)**. The frontend must:
+Pre-signed URLs expire after **3600 seconds (60 minutes)**. The frontend must:
 - **Fetch fresh URLs** from the API each time the user navigates to a page with downloadable content.
 - **Never cache** `file_url` or `archive_url` in localStorage or persistent state.
 - Component-level state (e.g., React `useState`) is fine since they refresh on re-mount.
@@ -220,7 +220,7 @@ Frontend (React/Next.js)                    Backend (Django 5.1)
 │  Bucket: storage1022 (private)      │
 │  Signature: AWS4-HMAC-SHA256        │
 │  Addressing: path-style             │
-│  Expires: 900s                      │
+│  Expires: 3600s                     │
 └──────────────────────────────────────┘
 ```
 
@@ -235,7 +235,7 @@ Frontend (React/Next.js)                    Backend (Django 5.1)
 | **Endpoint** | `https://storage-1022.s3hoster.by` (with hyphen) |
 | **Signature** | AWS Signature v4 (`s3v4`) |
 | **Addressing** | Path-style |
-| **URL Lifetime** | 15 minutes (900 seconds) |
+| **URL Lifetime** | 60 minutes (3600 seconds) |
 | **API Endpoint** | `GET /api/modules/` → `lessons[].file_url`, `lessons[].archive_url` |
 | **Upload Method** | Django Admin only |
 | **Django Version** | 5.1 (uses `STORAGES` dict, not `DEFAULT_FILE_STORAGE`) |

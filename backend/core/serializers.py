@@ -199,7 +199,7 @@ def _get_s3_client():
     )
 
 
-def generate_presigned_url(file_field, expires_in: int = 900) -> str | None:
+def generate_presigned_url(file_field, expires_in: int = 3600) -> str | None:
     """
     Генерирует временный pre-signed URL для файла в S3.
     Возвращает None если файл не задан.
