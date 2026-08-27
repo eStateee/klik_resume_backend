@@ -221,6 +221,14 @@ CRM_EMAIL = os.environ.get('CRM_EMAIL', 'test@test.com')
 CRM_API_KEY = os.environ.get('CRM_API_KEY', 'test_key')
 CRM_TOKEN_CACHE_TIMEOUT = int(os.environ.get('CRM_TOKEN_CACHE_TIMEOUT', 3600))
 
+# Сколько недель вперёд заглядывать при проверке расписания в CRM
+# (за пределы ближайшей недели). Доступ к модулям выдаётся заранее.
+CRM_LOOKAHEAD_WEEKS = int(os.environ.get('CRM_LOOKAHEAD_WEEKS', 2))
+
+# Длина «дальнего» окна в неделях. Захватываем столько полных недель
+# ПН–ВС после сдвига LOOKAHEAD_WEEKS.
+CRM_WINDOW_WEEKS = int(os.environ.get('CRM_WINDOW_WEEKS', 2))
+
 # Логирование: без явной конфигурации сообщения логгеров 'core' и 'app_resume'
 # уходили в lastResort-обработчик и терялись всё, что ниже WARNING.
 LOG_LEVEL = os.environ.get('DJANGO_LOG_LEVEL', 'INFO').upper()
