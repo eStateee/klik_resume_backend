@@ -1,12 +1,12 @@
 import logging
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 
 from asgiref.sync import async_to_sync
 from celery import shared_task
 from django.utils import timezone
 
 from core.models import Branch, Module, TutorModule, TutorProfile
-from core.services.alfa_crm_async import AlfaCRMError, get_tutor_subject_ids
+from core.services.alfa_crm_async import AlfaCRMError, get_tutor_subject_ids, get_week_range
 
 logger = logging.getLogger("app_resume")
 
@@ -15,17 +15,15 @@ logger = logging.getLogger("app_resume")
 def sync_all_tutors_access():
     """
     Еженедельная синхронизация доступов тьюторов к модулям на основе их
-    расписания в AlfaCRM за расширенный период (LOOKAHEAD_WEEKS + WINDOW_WEEKS
-    недель от ближайшего понедельника; по умолчанию 4 недели).
+    расписания в AlfaCRM за целевой период (с запасом LOOKAHEAD_WEEKS недель
+    и окном WINDOW_WEEKS недель).
 
     Для каждого активного тьютора:
-    - доступы к модулям, предметы которых он больше не ведёт, удаляются немедленно;
-    - доступы к модулям по предметам, которые он ведёт в этом периоде, продлеваются
-      (expires_at = сейчас + Module.validity_period).
-
-    Период начинается от ближайшего понедельника (без зазора), чтобы не потерять
-    доступы на текущей/следующей неделе, и заглядывает на LOOKAHEAD_WEEKS +
-    WINDOW_WEEKS недель вперёд для раннего предоставления доступа.
+    - доступы к модулям, предметы которых он больше не ведёт в целевом периоде,
+      удаляются;
+    - доступы к модулям по предметам, которые он ведёт в целевом периоде,
+      создаются или продлеваются (срок expires_at рассчитывается с учётом
+      окончания целевой недели уроков + Module.validity_period).
 
     Предметы CRM, для которых в БД нет активного Module, игнорируются.
     """
@@ -33,6 +31,9 @@ def sync_all_tutors_access():
     tutors = TutorProfile.objects.filter(is_active=True).exclude(
         tutor_crm_id__isnull=True
     ).exclude(tutor_crm_id="")
+
+    date_from, date_to = get_week_range()
+    target_end = timezone.make_aware(datetime.combine(date_to, time.max))
 
     for tutor in tutors:
         try:
@@ -67,10 +68,14 @@ def sync_all_tutors_access():
 
         now = timezone.now()
         for module in active_modules:
+            expires_at = max(
+                now + timedelta(days=module.validity_period),
+                target_end + timedelta(days=module.validity_period),
+            )
             TutorModule.objects.update_or_create(
                 tutor=tutor,
                 module=module,
-                defaults={"expires_at": now + timedelta(days=module.validity_period)},
+                defaults={"expires_at": expires_at},
             )
 
     logger.info("sync_all_tutors_access: обработано тьюторов=%s", tutors.count())

@@ -227,7 +227,7 @@ CRM_LOOKAHEAD_WEEKS = int(os.environ.get('CRM_LOOKAHEAD_WEEKS', 2))
 
 # Длина «дальнего» окна в неделях. Захватываем столько полных недель
 # ПН–ВС после сдвига LOOKAHEAD_WEEKS.
-CRM_WINDOW_WEEKS = int(os.environ.get('CRM_WINDOW_WEEKS', 2))
+CRM_WINDOW_WEEKS = int(os.environ.get('CRM_WINDOW_WEEKS', 1))
 
 # Логирование: без явной конфигурации сообщения логгеров 'core' и 'app_resume'
 # уходили в lastResort-обработчик и терялись всё, что ниже WARNING.

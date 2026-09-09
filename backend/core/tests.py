@@ -1,6 +1,6 @@
 from datetime import timedelta
 from unittest.mock import patch
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.core.cache import cache
 from django.core.management import call_command
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -650,6 +650,7 @@ class TokenRefreshTestCase(TestCase):
         self.assertTrue(AccessToken(response.data["access"])["is_senior"])
 
 
+@override_settings(AWS_ACCESS_KEY_ID=None, AWS_SECRET_ACCESS_KEY=None)
 class EmployeeTestCase(TestCase):
     def setUp(self):
         self.branch = Branch.objects.create(name="Минск", branch_crm_id=1)
@@ -1274,3 +1275,87 @@ class DefaultPermissionTestCase(TestCase):
 
         schema = self.client.get("/api/schema/")
         self.assertEqual(schema.status_code, status.HTTP_200_OK)
+
+
+class TutorAccessSyncTestCase(TestCase):
+    """Тестирование алгоритмов выдачи доступов тьюторам к модулям."""
+
+    def test_dedupe_lessons(self):
+        from core.services.alfa_crm_async import dedupe_lessons
+
+        raw_lessons = [
+            {"id": 101, "name": "Урок 1"},
+            {"id": 102, "name": "Урок 2"},
+            {"id": 101, "name": "Урок 1 дубликат"},
+            {"id": None, "name": "Без ID 1"},
+            {"id": None, "name": "Без ID 2"},
+        ]
+        unique = dedupe_lessons(raw_lessons)
+        self.assertEqual(len(unique), 4)
+        self.assertEqual([item.get("id") for item in unique[:2]], [101, 102])
+
+    def test_filter_lessons_in_period(self):
+        from datetime import date
+        from core.services.alfa_crm_async import filter_lessons_in_period
+
+        d_from = date(2026, 9, 21)
+        d_to = date(2026, 9, 27)
+
+        lessons = [
+            {"id": 1, "date": "2026-09-21 10:00:00"},
+            {"id": 2, "date": "2026-09-27"},
+            {"id": 3, "date": "2026-09-20"},  # до периода
+            {"id": 4, "date": "2026-09-28"},  # после периода
+            {"id": 5, "date": "некорректная дата"},
+        ]
+
+        inside, outside = filter_lessons_in_period(lessons, d_from, d_to)
+        self.assertEqual([l["id"] for l in inside], [1, 2])
+        self.assertEqual([l["id"] for l in outside], [3, 4, 5])
+
+    def test_get_week_range(self):
+        from datetime import date
+        from core.services.alfa_crm_async import get_week_range
+
+        # Запуск в ВС 06.09 -> ожидаем начало 21.09 (через 2 недели) и конец 27.09 (1 неделя)
+        m1, s1 = get_week_range(date(2026, 9, 6))
+        self.assertEqual(m1, date(2026, 9, 21))
+        self.assertEqual(s1, date(2026, 9, 27))
+
+        # Запуск в ПН 07.09 -> тот же период 21.09 - 27.09
+        m2, s2 = get_week_range(date(2026, 9, 7))
+        self.assertEqual(m2, date(2026, 9, 21))
+        self.assertEqual(s2, date(2026, 9, 27))
+
+    @patch("core.tasks.get_tutor_subject_ids")
+    def test_sync_all_tutors_access(self, mock_get_subjects):
+        from core.models import Branch, Category, Subcategory, Module, TutorProfile, TutorModule
+        from core.tasks import sync_all_tutors_access
+
+        branch = Branch.objects.create(name="Филиал тест", branch_crm_id=1)
+        cat = Category.objects.create(name="Категория")
+        subcat = Subcategory.objects.create(name="Подкатегория", category=cat)
+
+        mod_active = Module.objects.create(name="Модуль А", subject_crm_id=10, subcategory=subcat, validity_period=7)
+        mod_old = Module.objects.create(name="Модуль Старый", subject_crm_id=20, subcategory=subcat, validity_period=7)
+
+        tutor = TutorProfile.objects.create(tutor_name="Иван", tutor_crm_id="100", branch=branch, is_active=True)
+        # Исходно есть старый модуль
+        TutorModule.objects.create(tutor=tutor, module=mod_old, expires_at=timezone.now() + timedelta(days=1))
+
+        # Мокаем возврат предметов из AlfaCRM: возвращается только mod_active (10)
+        async def fake_get_subjects(*args, **kwargs):
+            return [10]
+
+        mock_get_subjects.side_effect = fake_get_subjects
+
+        sync_all_tutors_access()
+
+        # Старый модуль должен быть удален
+        self.assertFalse(TutorModule.objects.filter(tutor=tutor, module=mod_old).exists())
+
+        # Новый модуль должен быть выдан
+        tm = TutorModule.objects.filter(tutor=tutor, module=mod_active).first()
+        self.assertIsNotNone(tm)
+        # Срок действия должен быть дальше, чем просто now + 7 дней, так как целевой период в будущем
+        self.assertGreater(tm.expires_at, timezone.now() + timedelta(days=10))

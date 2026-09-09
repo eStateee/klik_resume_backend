@@ -51,10 +51,12 @@ __all__ = [
     "AlfaCRMError",
     "RateLimiter",
     "collect_group_ids",
+    "dedupe_lessons",
     "extract_subject_ids",
     "fetch_group_lessons",
     "fetch_personal_lessons",
     "fetch_tutor_groups",
+    "filter_lessons_in_period",
     "get_tutor_subject_ids",
     "get_week_range",
     "resolve_subject_names",
@@ -150,12 +152,10 @@ def get_week_range(today: date | None = None) -> tuple[date, date]:
     else:  # ПН..СБ: берём понедельник текущей недели
         base_monday = today - timedelta(days=today.weekday())
 
-    # Период: от ближайшего ПН до конца lookahead + window.
-    # Начинаем от base_monday (без зазора), чтобы не потерять доступы
-    # к модулям, уроки которых идут на текущей/следующей неделе.
-    total_weeks = LOOKAHEAD_WEEKS + WINDOW_WEEKS
-    sunday = base_monday + timedelta(weeks=total_weeks) - timedelta(days=1)
-    return base_monday, sunday
+    # Сдвигаем период на запас времени и растягиваем на нужное число недель.
+    monday = base_monday + timedelta(weeks=LOOKAHEAD_WEEKS)
+    sunday = monday + timedelta(weeks=WINDOW_WEEKS) - timedelta(days=1)
+    return monday, sunday
 
 
 def format_api_date(value: date) -> str:
@@ -440,6 +440,7 @@ class AlfaCRMClient:
             Плоский список моделей из всех страниц.
         """
         collected: list[dict[str, Any]] = []
+        seen_ids: set[int] = set()
         page = 0
 
         while page < MAX_PAGES:
@@ -448,6 +449,23 @@ class AlfaCRMClient:
 
             items = response.get("items") or []
             collected.extend(items)
+
+            # Если сервер проигнорировал `page`, он вернёт ту же страницу снова —
+            # ловим это по повтору id, иначе цикл накрутит дубли до `total`.
+            page_ids = {
+                item["id"]
+                for item in items
+                if isinstance(item.get("id"), int) and not isinstance(item["id"], bool)
+            }
+            if page_ids and page_ids <= seen_ids:
+                logger.warning(
+                    "%s: страница %s повторяет уже полученные записи — "
+                    "пагинация остановлена (сервер игнорирует параметр page?)",
+                    entity,
+                    page,
+                )
+                break
+            seen_ids |= page_ids
 
             total = response.get("total")
             if not items or (isinstance(total, int) and len(collected) >= total):
@@ -635,6 +653,84 @@ def extract_subject_ids(lessons: Iterable[dict[str, Any]]) -> set[int]:
     return subject_ids
 
 
+def dedupe_lessons(lessons: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Убрать повторы уроков по ``id``, сохранив порядок первого вхождения.
+
+    Один и тот же урок приходит из CRM несколько раз по трём причинам:
+
+    1. **Пересечение выборок.** ``lesson/index`` с ``teacher_id`` возвращает в том
+       числе групповые уроки наставника — те же, что уже пришли по ``group_id``.
+       Без дедупликации каждый такой урок считается дважды.
+    2. **Урок в нескольких группах.** У модели ``Lesson`` поле ``group_ids`` —
+       массив; если урок привязан к двум группам наставника, он придёт в ответе
+       на запрос по каждой из них.
+    3. **Пагинация.** Если сервер проигнорирует ``page`` и вернёт первую страницу
+       повторно, дубли попадут в общий список.
+
+    Уроки без корректного ``id`` не с чем сравнивать — они сохраняются как есть.
+
+    Args:
+        lessons: Модели уроков, возможно с повторами.
+
+    Returns:
+        Список уникальных уроков в порядке первого появления.
+    """
+    unique: dict[int, dict[str, Any]] = {}
+    without_id: list[dict[str, Any]] = []
+
+    for lesson in lessons:
+        lesson_id = lesson.get("id")
+        if isinstance(lesson_id, int) and not isinstance(lesson_id, bool):
+            unique.setdefault(lesson_id, lesson)
+        else:
+            without_id.append(lesson)
+
+    return [*unique.values(), *without_id]
+
+
+def filter_lessons_in_period(
+    lessons: Iterable[dict[str, Any]],
+    date_from: date,
+    date_to: date,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Разделить уроки на попавшие в период и вышедшие за его границы.
+
+    Серверные фильтры ``date_from``/``date_to`` перепроверяются на нашей стороне:
+    так ошибка в фильтре (или расширенное окно из-за неверных границ) сразу видна
+    в логе, а не растворяется в итоговом списке предметов.
+
+    Дата урока берётся из поля ``date`` в формате ``YYYY-MM-DD``. Уроки без даты
+    или с нераспознаваемой датой считаются вышедшими за границы — их лучше
+    заметить в логе, чем молча учесть.
+
+    Args:
+        lessons: Модели уроков из ``lesson/index``.
+        date_from: Начало периода (понедельник), включительно.
+        date_to: Конец периода (воскресенье), включительно.
+
+    Returns:
+        Кортеж ``(в периоде, вне периода)``.
+    """
+    inside: list[dict[str, Any]] = []
+    outside: list[dict[str, Any]] = []
+
+    for lesson in lessons:
+        raw_date = lesson.get("date")
+        # CRM отдаёт "YYYY-MM-DD"; иногда с временем — берём первые 10 символов.
+        try:
+            lesson_date = date.fromisoformat(str(raw_date)[:10])
+        except (TypeError, ValueError):
+            outside.append(lesson)
+            continue
+
+        if date_from <= lesson_date <= date_to:
+            inside.append(lesson)
+        else:
+            outside.append(lesson)
+
+    return inside, outside
+
+
 async def resolve_subject_names(
     client: AlfaCRMClient,
     subject_ids: Iterable[int],
@@ -673,8 +769,13 @@ async def _collect_branch_subject_ids(
 ) -> set[int]:
     """Пройти всю цепочку схемы внутри одного филиала.
 
-    Группы -> уроки недели -> предметы уроков. Уроки всех групп запрашиваются
+    Группы -> уроки периода -> предметы уроков. Уроки всех групп запрашиваются
     конкурентно; общий лимит 5 запросов/сек соблюдает :class:`RateLimiter`.
+
+    Выборки по группам и по педагогу пересекаются, поэтому сырой список уроков
+    проходит через :func:`dedupe_lessons`, а затем через
+    :func:`filter_lessons_in_period` — предметы считаются только по уникальным
+    урокам внутри запрошенного периода.
 
     Returns:
         Множество ``subject_id``, найденных в этом филиале.
@@ -692,16 +793,37 @@ async def _collect_branch_subject_ids(
         )
 
     lessons_per_task = await asyncio.gather(*tasks)
-    lessons = [lesson for chunk in lessons_per_task for lesson in chunk]
+    raw_lessons = [lesson for chunk in lessons_per_task for lesson in chunk]
+
+    # 1) снимаем пересечение выборок, 2) перепроверяем границы периода.
+    unique_lessons = dedupe_lessons(raw_lessons)
+    lessons, out_of_period = filter_lessons_in_period(unique_lessons, date_from, date_to)
 
     subject_ids = extract_subject_ids(lessons)
     logger.info(
-        "Филиал %s: групп=%s, уроков=%s, предметов=%s",
+        "Филиал %s: групп=%s, уроков=%s (сырых=%s, дублей=%s, вне периода=%s), предметов=%s",
         branch,
         len(group_ids),
         len(lessons),
+        len(raw_lessons),
+        len(raw_lessons) - len(unique_lessons),
+        len(out_of_period),
         len(subject_ids),
     )
+
+    if out_of_period:
+        # Сервер вернул то, что мы не просили — значит фильтр по датам не сработал.
+        sample = sorted({str(item.get("date")) for item in out_of_period})[:5]
+        logger.warning(
+            "Филиал %s: %s уроков вне периода %s — %s (примеры дат: %s). "
+            "Проверьте фильтры date_from/date_to в lesson/index.",
+            branch,
+            len(out_of_period),
+            format_api_date(date_from),
+            format_api_date(date_to),
+            ", ".join(sample),
+        )
+
     return subject_ids
 
 
@@ -723,8 +845,8 @@ async def get_tutor_subject_ids(
 
     Итоговая функция, реализующая схему целиком:
 
-    1. вычисляет границы периода (:func:`get_week_range`) — от ближайшего ПН
-       до конца ``LOOKAHEAD_WEEKS + WINDOW_WEEKS`` недель;
+    1. вычисляет границы периода (:func:`get_week_range`) — отстоящие на
+       ``LOOKAHEAD_WEEKS`` недель и длящиеся ``WINDOW_WEEKS`` недель;
     2. по каждому филиалу компании находит группы наставника (``teacher_id=crm_id``);
     3. по каждой группе читает уроки недели в нужных статусах;
     4. опционально добирает уроки, где наставник — педагог урока;
