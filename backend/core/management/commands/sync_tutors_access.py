@@ -1,8 +1,7 @@
-import asyncio
 import logging
 from datetime import datetime, time, timedelta
 
-from asgiref.sync import async_to_sync
+from asgiref.sync import async_to_sync, sync_to_async
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
@@ -85,9 +84,35 @@ class Command(BaseCommand):
                 tutor_crm_id__isnull=True
             ).exclude(tutor_crm_id="")
 
-        processed_count = 0
-        async_run = async_to_sync(self._process_tutors)
-        async_run(tutors, branch_ids, with_names, dry_run, target_end)
+        # QuerySet нельзя итерировать из async-контекста — материализуем заранее
+        tutors_list = list(tutors)
+        async_to_sync(self._process_tutors)(tutors_list, branch_ids, with_names, dry_run, target_end)
+
+    # ------------------------------------------------------------------
+    # Синхронные ORM-хелперы (вызываются через sync_to_async изнутри async)
+    # ------------------------------------------------------------------
+
+    def _get_active_modules(self, subject_ids):
+        return list(Module.objects.filter(subject_crm_id__in=subject_ids, is_active=True))
+
+    def _get_existing_tutor_modules(self, tutor):
+        return list(TutorModule.objects.filter(tutor=tutor).select_related("module"))
+
+    def _delete_tutor_modules(self, ids):
+        deleted_cnt, _ = TutorModule.objects.filter(id__in=ids).delete()
+        return deleted_cnt
+
+    def _upsert_tutor_module(self, tutor, module, expires_at):
+        _, created = TutorModule.objects.update_or_create(
+            tutor=tutor,
+            module=module,
+            defaults={"expires_at": expires_at},
+        )
+        return created
+
+    # ------------------------------------------------------------------
+    # Асинхронный пайплайн
+    # ------------------------------------------------------------------
 
     async def _process_tutors(
         self, tutors, branch_ids, with_names: bool, dry_run: bool, target_end
@@ -130,18 +155,15 @@ class Command(BaseCommand):
                     for sid in subject_ids:
                         self.stdout.write(f"  • {sid}: {names_map.get(sid, '<не найден>')}")
 
-                active_modules = list(
-                    Module.objects.filter(subject_crm_id__in=subject_ids, is_active=True)
-                )
+                # ORM — только через sync_to_async
+                active_modules = await sync_to_async(self._get_active_modules)(subject_ids)
                 active_module_ids = [m.pk for m in active_modules]
                 self.stdout.write(
                     f"Соответствующих активных модулей в платформе: {len(active_modules)} "
                     f"({[m.name for m in active_modules]})"
                 )
 
-                existing_modules = list(
-                    TutorModule.objects.filter(tutor=tutor).select_related("module")
-                )
+                existing_modules = await sync_to_async(self._get_existing_tutor_modules)(tutor)
                 to_delete = [
                     tm for tm in existing_modules if tm.module_id not in active_module_ids
                 ]
@@ -160,7 +182,7 @@ class Command(BaseCommand):
                 if not dry_run:
                     if to_delete:
                         delete_ids = [tm.pk for tm in to_delete]
-                        deleted_cnt, _ = TutorModule.objects.filter(id__in=delete_ids).delete()
+                        deleted_cnt = await sync_to_async(self._delete_tutor_modules)(delete_ids)
                         self.stdout.write(
                             self.style.SUCCESS(f"Удалено устаревших доступов: {deleted_cnt}")
                         )
@@ -172,10 +194,8 @@ class Command(BaseCommand):
                             now + timedelta(days=module.validity_period),
                             target_end + timedelta(days=module.validity_period),
                         )
-                        _, created = TutorModule.objects.update_or_create(
-                            tutor=tutor,
-                            module=module,
-                            defaults={"expires_at": expires_at},
+                        created = await sync_to_async(self._upsert_tutor_module)(
+                            tutor, module, expires_at
                         )
                         if created:
                             created_cnt += 1
