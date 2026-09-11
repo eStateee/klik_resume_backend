@@ -59,6 +59,8 @@ __all__ = [
     "filter_lessons_in_period",
     "get_tutor_subject_ids",
     "get_week_range",
+    "group_has_teacher",
+    "normalize_teacher_name",
     "resolve_subject_names",
 ]
 
@@ -101,6 +103,11 @@ API_DATE_FORMAT: Final[str] = "%Y-%m-%d"
 
 #: Защита от бесконечного цикла пейджинации.
 MAX_PAGES: Final[int] = 200
+
+#: Доля дублей в сыром списке уроков, выше которой это уже не пересечение
+#: выборок (по группам и по педагогу), а признак сбоя — например, сервер
+#: проигнорировал `page` и вернул одну и ту же страницу несколько раз.
+MAX_DUPLICATE_RATIO: Final[float] = 0.6
 
 #: Сетевые настройки и ретраи.
 REQUEST_TIMEOUT: Final[float] = 30.0
@@ -475,10 +482,100 @@ class AlfaCRMClient:
 
         return collected
 
+    async def teacher_names(self, branch: int) -> dict[int, str]:
+        """Прочитать справочник имён педагогов филиала.
+
+        Нужен там, где группу приходится сверять с наставником по имени:
+        в поле ``group.teacher_ids`` CRM отдаёт не только числовые id, но и
+        имена педагогов (см. :func:`group_has_teacher`).
+
+        Args:
+            branch: ID филиала.
+
+        Returns:
+            Словарь ``{teacher_id: name}``. Записи без числового ``id``
+            пропускаются.
+        """
+        teachers = await self.fetch_all("teacher", {}, branch=branch)
+
+        names: dict[int, str] = {}
+        for teacher in teachers:
+            teacher_id = teacher.get("id")
+            # bool — подкласс int, поэтому исключаем его явно.
+            if isinstance(teacher_id, int) and not isinstance(teacher_id, bool):
+                names[teacher_id] = str(teacher.get("name") or "")
+
+        return names
+
 
 # --------------------------------------------------------------------------- #
 # Промежуточные функции алгоритма                                              #
 # --------------------------------------------------------------------------- #
+
+
+def normalize_teacher_name(value: str) -> str:
+    """Привести имя педагога к виду, пригодному для сравнения.
+
+    CRM отдаёт имена в свободной форме: с неразрывными пробелами, двойными
+    пробелами, разным регистром и произвольным написанием «е»/«ё». Прямое
+    сравнение строк из-за этого даёт ложные расхождения.
+
+    Args:
+        value: Имя педагога как его вернула CRM.
+
+    Returns:
+        Нормализованное имя: одиночные обычные пробелы, «ё» → «е», нижний регистр.
+    """
+    cleaned = value.replace("\xa0", " ").replace("ё", "е").replace("Ё", "Е")
+    return " ".join(cleaned.split()).casefold()
+
+
+def group_has_teacher(
+    group: dict[str, Any],
+    crm_id: int,
+    teacher_name: str | None = None,
+) -> bool:
+    """Проверить, закреплён ли наставник за группой прямо сейчас.
+
+    Элементы ``group.teacher_ids`` неоднородны: CRM кладёт туда как числовые
+    id педагогов, так и их имена (или id строкой). Поэтому сверяем по обоим
+    признакам — по id и, если он известен, по нормализованному имени.
+
+    Args:
+        group: Модель группы из ``group/index``.
+        crm_id: ID наставника (педагога) в CRM.
+        teacher_name: Имя наставника из справочника
+            :meth:`AlfaCRMClient.teacher_names`. ``None`` — сверяем только по id.
+
+    Returns:
+        ``True``, если наставник найден среди ``teacher_ids`` группы.
+    """
+    raw = group.get("teacher_ids") or []
+    if not isinstance(raw, (list, tuple, set)):
+        raw = [raw]
+
+    wanted_name = normalize_teacher_name(teacher_name) if teacher_name else None
+
+    for item in raw:
+        # bool — подкласс int, поэтому исключаем его явно.
+        if isinstance(item, int) and not isinstance(item, bool):
+            if item == crm_id:
+                return True
+            continue
+
+        if not isinstance(item, str):
+            continue
+
+        text = item.strip()
+        if text.isdigit():
+            if int(text) == crm_id:
+                return True
+            continue
+
+        if wanted_name and normalize_teacher_name(text) == wanted_name:
+            return True
+
+    return False
 
 
 async def fetch_tutor_groups(
@@ -497,6 +594,14 @@ async def fetch_tutor_groups(
     фильтр вернул пусто, а ``local_fallback`` включён, читаем все активные
     группы филиала и сверяем ``teacher_ids`` локально.
 
+    Серверному фильтру нельзя верить и в обратную сторону: он отдаёт в том
+    числе группы с архивным закреплением — те, где наставник когда-то вёл
+    занятия, а сейчас в ``teacher_ids`` стоит другой педагог. Уроки таких групп
+    добавляли наставнику лишние предметы, поэтому каждая найденная группа
+    дополнительно сверяется через :func:`group_has_teacher`. Группы, в модели
+    которых поля ``teacher_ids`` нет вовсе, проверить нечем — они остаются
+    в выборке.
+
     Args:
         client: Авторизованный клиент CRM.
         crm_id: ID наставника (педагога) в CRM.
@@ -505,25 +610,68 @@ async def fetch_tutor_groups(
             если серверный фильтр не дал результатов.
 
     Returns:
-        Список моделей групп (только активные, ``removed=0``).
+        Список моделей групп (только активные, ``removed=0``), за которыми
+        наставник закреплён сейчас.
     """
-    groups = await client.fetch_all(
+    found = await client.fetch_all(
         "group",
         {"teacher_id": crm_id, "removed": 0},
         branch=branch,
     )
 
-    if not groups and local_fallback:
+    # Имя нужно, если CRM отдаёт в teacher_ids имена, а не числовые id.
+    teacher_name = (await client.teacher_names(branch)).get(crm_id)
+
+    if not found and local_fallback:
         all_groups = await client.fetch_all("group", {"removed": 0}, branch=branch)
-        groups = [
-            group for group in all_groups if crm_id in (group.get("teacher_ids") or [])
+        found = [
+            group
+            for group in all_groups
+            if group_has_teacher(group, crm_id, teacher_name)
         ]
-        if groups:
+        if found:
             logger.debug(
                 "Филиал %s: группы наставника %s найдены локальной сверкой teacher_ids",
                 branch,
                 crm_id,
             )
+
+    groups: list[dict[str, Any]] = []
+    stale: list[dict[str, Any]] = []
+    unverifiable: list[dict[str, Any]] = []
+
+    for group in found:
+        if "teacher_ids" not in group:
+            unverifiable.append(group)
+            groups.append(group)  # проверить нечем
+        elif group_has_teacher(group, crm_id, teacher_name):
+            groups.append(group)  # закреплён сейчас
+        else:
+            stale.append(group)  # архив — мимо
+
+    if stale:
+        sample = ", ".join(
+            f"{item.get('name') or item.get('id')} -> {item.get('teacher_ids')}"
+            for item in stale[:5]
+        )
+        logger.info(
+            "Филиал %s: наставник %s — отброшено %s из %s групп: закрепление "
+            "архивное, сейчас там другой педагог (%s)",
+            branch,
+            crm_id,
+            len(stale),
+            len(found),
+            sample,
+        )
+
+    if unverifiable:
+        logger.debug(
+            "Филиал %s: %s групп наставника %s без поля teacher_ids — "
+            "закрепление проверить нечем, группы оставлены в выборке",
+            branch,
+            len(unverifiable),
+            crm_id,
+        )
 
     logger.debug("Филиал %s: найдено %s групп наставника %s", branch, len(groups), crm_id)
     return groups
@@ -800,13 +948,21 @@ async def _collect_branch_subject_ids(
     lessons, out_of_period = filter_lessons_in_period(unique_lessons, date_from, date_to)
 
     subject_ids = extract_subject_ids(lessons)
-    logger.info(
+
+    # Пересечение выборок по группам и по педагогу — норма, поэтому дубли сами
+    # по себе не повод для тревоги. А вот доля выше MAX_DUPLICATE_RATIO значит,
+    # что сырой список почти целиком состоит из повторов — так выглядит сбой
+    # (например, сервер проигнорировал пагинацию), и это стоит увидеть в логе.
+    dupes = len(raw_lessons) - len(unique_lessons)
+    ratio = dupes / len(raw_lessons) if raw_lessons else 0.0
+    logger.log(
+        logging.WARNING if ratio > MAX_DUPLICATE_RATIO else logging.INFO,
         "Филиал %s: групп=%s, уроков=%s (сырых=%s, дублей=%s, вне периода=%s), предметов=%s",
         branch,
         len(group_ids),
         len(lessons),
         len(raw_lessons),
-        len(raw_lessons) - len(unique_lessons),
+        dupes,
         len(out_of_period),
         len(subject_ids),
     )
