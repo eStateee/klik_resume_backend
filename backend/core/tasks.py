@@ -19,11 +19,13 @@ def sync_all_tutors_access():
     и окном WINDOW_WEEKS недель).
 
     Для каждого активного тьютора:
-    - доступы к модулям, предметы которых он больше не ведёт в целевом периоде,
-      удаляются;
-    - доступы к модулям по предметам, которые он ведёт в целевом периоде,
-      создаются или продлеваются (срок expires_at рассчитывается с учётом
-      окончания целевой недели уроков + Module.validity_period).
+    - если доступа к модулю ещё нет — создаёт с expires_at = now + validity_period;
+    - если доступ есть, но expires_at наступает раньше начала целевой недели —
+      продлевает (expires_at = now + validity_period);
+    - если доступ и так покрывает целевую неделю — не трогает.
+
+    Отзыв просроченных доступов выполняется отдельной задачей
+    revoke_expired_accesses (по условию expires_at < now).
 
     Предметы CRM, для которых в БД нет активного Module, игнорируются.
     """
@@ -33,7 +35,7 @@ def sync_all_tutors_access():
     ).exclude(tutor_crm_id="")
 
     date_from, date_to = get_week_range()
-    target_end = timezone.make_aware(datetime.combine(date_to, time.max))
+    target_start = timezone.make_aware(datetime.combine(date_from, time.min))
 
     for tutor in tutors:
         try:
@@ -62,21 +64,21 @@ def sync_all_tutors_access():
             subject_crm_id__in=subject_ids, is_active=True
         )
 
-        TutorModule.objects.filter(tutor=tutor).exclude(
-            module__in=active_modules
-        ).delete()
-
         now = timezone.now()
         for module in active_modules:
-            expires_at = max(
-                now + timedelta(days=module.validity_period),
-                target_end + timedelta(days=module.validity_period),
-            )
-            TutorModule.objects.update_or_create(
-                tutor=tutor,
-                module=module,
-                defaults={"expires_at": expires_at},
-            )
+            expires_at = now + timedelta(days=module.validity_period)
+
+            existing = TutorModule.objects.filter(
+                tutor=tutor, module=module
+            ).first()
+
+            if existing is None:
+                TutorModule.objects.create(
+                    tutor=tutor, module=module, expires_at=expires_at
+                )
+            elif existing.expires_at < target_start:
+                existing.expires_at = expires_at
+                existing.save(update_fields=["expires_at"])
 
     logger.info("sync_all_tutors_access: обработано тьюторов=%s", tutors.count())
 

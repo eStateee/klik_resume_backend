@@ -54,7 +54,7 @@ class Command(BaseCommand):
             logger.setLevel(logging.DEBUG)
 
         date_from, date_to = get_week_range()
-        target_end = timezone.make_aware(datetime.combine(date_to, time.max))
+        target_start = timezone.make_aware(datetime.combine(date_from, time.min))
 
         self.stdout.write(
             self.style.NOTICE(
@@ -86,7 +86,7 @@ class Command(BaseCommand):
 
         # QuerySet нельзя итерировать из async-контекста — материализуем заранее
         tutors_list = list(tutors)
-        async_to_sync(self._process_tutors)(tutors_list, branch_ids, with_names, dry_run, target_end)
+        async_to_sync(self._process_tutors)(tutors_list, branch_ids, with_names, dry_run, target_start)
 
     # ------------------------------------------------------------------
     # Синхронные ORM-хелперы (вызываются через sync_to_async изнутри async)
@@ -95,27 +95,23 @@ class Command(BaseCommand):
     def _get_active_modules(self, subject_ids):
         return list(Module.objects.filter(subject_crm_id__in=subject_ids, is_active=True))
 
-    def _get_existing_tutor_modules(self, tutor):
-        return list(TutorModule.objects.filter(tutor=tutor).select_related("module"))
-
-    def _delete_tutor_modules(self, ids):
-        deleted_cnt, _ = TutorModule.objects.filter(id__in=ids).delete()
-        return deleted_cnt
-
-    def _upsert_tutor_module(self, tutor, module, expires_at):
-        _, created = TutorModule.objects.update_or_create(
-            tutor=tutor,
-            module=module,
-            defaults={"expires_at": expires_at},
-        )
-        return created
+    def _create_or_renew_tutor_module(self, tutor, module, expires_at, target_start):
+        existing = TutorModule.objects.filter(tutor=tutor, module=module).first()
+        if existing is None:
+            TutorModule.objects.create(tutor=tutor, module=module, expires_at=expires_at)
+            return "created"
+        elif existing.expires_at < target_start:
+            existing.expires_at = expires_at
+            existing.save(update_fields=["expires_at"])
+            return "renewed"
+        return "skipped"
 
     # ------------------------------------------------------------------
     # Асинхронный пайплайн
     # ------------------------------------------------------------------
 
     async def _process_tutors(
-        self, tutors, branch_ids, with_names: bool, dry_run: bool, target_end
+        self, tutors, branch_ids, with_names: bool, dry_run: bool, target_start
     ):
         async with AlfaCRMClient() as client:
             for tutor in tutors:
@@ -157,54 +153,32 @@ class Command(BaseCommand):
 
                 # ORM — только через sync_to_async
                 active_modules = await sync_to_async(self._get_active_modules)(subject_ids)
-                active_module_ids = [m.pk for m in active_modules]
                 self.stdout.write(
                     f"Соответствующих активных модулей в платформе: {len(active_modules)} "
                     f"({[m.name for m in active_modules]})"
                 )
 
-                existing_modules = await sync_to_async(self._get_existing_tutor_modules)(tutor)
-                to_delete = [
-                    tm for tm in existing_modules if tm.module_id not in active_module_ids
-                ]
-
-                if to_delete:
-                    self.stdout.write(
-                        self.style.WARNING(
-                            f"Доступы к удалению ({len(to_delete)}): "
-                            f"{[tm.module.name for tm in to_delete]}"
-                        )
-                    )
-                else:
-                    self.stdout.write("Нет доступов к удалению.")
-
                 now = timezone.now()
                 if not dry_run:
-                    if to_delete:
-                        delete_ids = [tm.pk for tm in to_delete]
-                        deleted_cnt = await sync_to_async(self._delete_tutor_modules)(delete_ids)
-                        self.stdout.write(
-                            self.style.SUCCESS(f"Удалено устаревших доступов: {deleted_cnt}")
-                        )
-
-                    updated_cnt = 0
                     created_cnt = 0
+                    renewed_cnt = 0
+                    skipped_cnt = 0
                     for module in active_modules:
-                        expires_at = max(
-                            now + timedelta(days=module.validity_period),
-                            target_end + timedelta(days=module.validity_period),
+                        expires_at = now + timedelta(days=module.validity_period)
+                        result = await sync_to_async(self._create_or_renew_tutor_module)(
+                            tutor, module, expires_at, target_start
                         )
-                        created = await sync_to_async(self._upsert_tutor_module)(
-                            tutor, module, expires_at
-                        )
-                        if created:
+                        if result == "created":
                             created_cnt += 1
+                        elif result == "renewed":
+                            renewed_cnt += 1
                         else:
-                            updated_cnt += 1
+                            skipped_cnt += 1
 
                     self.stdout.write(
                         self.style.SUCCESS(
-                            f"Выдано доступов: новых={created_cnt}, продлено={updated_cnt}"
+                            f"Доступы: новых={created_cnt}, продлено={renewed_cnt}, "
+                            f"без изменений={skipped_cnt}"
                         )
                     )
                 else:
