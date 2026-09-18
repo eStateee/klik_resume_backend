@@ -342,12 +342,13 @@ class StudentSerializer(serializers.ModelSerializer):
     is_verified = serializers.SerializerMethodField()
     is_review_exist = serializers.SerializerMethodField()
     group_name = serializers.SerializerMethodField()
+    location = serializers.SerializerMethodField()
 
     class Meta:
         model = Student
         fields = [
             "id", "student_crm_id", "student_name", "study_start_date",
-            "branch", "group", "group_name", "is_added", "is_verified",
+            "branch", "group", "group_name", "location", "is_added", "is_verified",
             "is_review_exist",
         ]
 
@@ -378,6 +379,13 @@ class StudentSerializer(serializers.ModelSerializer):
         if obj.group is None:
             return None
         return obj.group.name
+
+    @extend_schema_field(serializers.CharField(allow_null=True))
+    def get_location(self, obj):
+        """Возвращает название локации группы студента или None."""
+        if obj.group is None or obj.group.location is None:
+            return None
+        return obj.group.location.name
 
 
 class ResumeSerializer(serializers.ModelSerializer):

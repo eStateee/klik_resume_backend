@@ -155,7 +155,7 @@ class GroupViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=['get'])
     def clients(self, request, pk=None):
         group = self.get_object()
-        students = annotate_student_flags(group.students.select_related('group'))
+        students = annotate_student_flags(group.students.select_related('group__location'))
         serializer = StudentSerializer(students, many=True, context=self.get_serializer_context())
         return Response(serializer.data)
 
@@ -175,7 +175,7 @@ class StudentViewSet(viewsets.ReadOnlyModelViewSet):
         branch_id = auth.get('branch_id')
         is_senior = auth.get('is_senior')
         
-        qs = annotate_student_flags(Student.objects.select_related('group'))
+        qs = annotate_student_flags(Student.objects.select_related('group__location'))
 
         if is_senior:
             return qs
@@ -247,11 +247,26 @@ class ResumeViewSet(viewsets.ModelViewSet):
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
 
-    @action(detail=False, methods=['get'], url_path='client')
-    def client(self, request):
-        student_crm_id = request.query_params.get('student_crm_id')
+    @extend_schema(
+        summary="Получить список резюме студента",
+        description="Возвращает список всех резюме конкретного студента по его CRM ID (`student_crm_id`).",
+        parameters=[
+            OpenApiParameter(
+                name="student_crm_id",
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.PATH,
+                description="CRM ID студента",
+            ),
+        ],
+        responses={200: ResumeSerializer(many=True)},
+    )
+    @action(detail=False, methods=['get'], url_path=r'client/(?P<student_crm_id>[^/.]+)')
+    def client(self, request, student_crm_id=None):
         if not student_crm_id:
-            return Response({"detail": "student_crm_id parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": "student_crm_id parameter is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         qs = self.get_queryset().filter(student__student_crm_id=student_crm_id)
         serializer = self.get_serializer(qs, many=True)
         return Response(serializer.data)

@@ -895,6 +895,22 @@ class ResumeScopeTestCase(TestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
+    def test_get_resumes_by_student_crm_id(self):
+        Resume.objects.create(student=self.own_student, content="Резюме 1")
+        Resume.objects.create(student=self.own_student, content="Резюме 2")
+        self._auth("375291111111")
+        response = self.client.get(f"/api/resumes/client/{self.own_student.student_crm_id}/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 2)
+        contents = [item["content"] for item in response.data]
+        self.assertIn("Резюме 1", contents)
+        self.assertIn("Резюме 2", contents)
+
+    def test_get_resumes_without_crm_id_returns_404(self):
+        self._auth("375291111111")
+        response = self.client.get("/api/resumes/client/")
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
 
 class GroupCountersTestCase(TestCase):
     """Счётчики группы должны совпадать с полем is_verified у студентов."""
@@ -951,6 +967,29 @@ class GroupCountersTestCase(TestCase):
         clients = self.client.get(f"/api/groups/{self.group.id}/clients/")
         flags = {item["student_crm_id"]: item["is_verified"] for item in clients.data}
         self.assertEqual(flags, {"s1": True, "s2": False})
+
+    def test_group_clients_includes_location_name(self):
+        location = Location.objects.create(name="Немига", branch=self.branch)
+        self.group.location = location
+        self.group.save()
+
+        Student.objects.create(
+            student_crm_id="s_loc", group=self.group, student_name="Студент с локацией",
+            branch=self.branch, is_added=True,
+        )
+
+        response = self.client.get(f"/api/groups/{self.group.id}/clients/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["location"], "Немига")
+
+        # Проверяем, что при отсутствии локации возвращается None
+        self.group.location = None
+        self.group.save()
+
+        response_no_loc = self.client.get(f"/api/groups/{self.group.id}/clients/")
+        self.assertEqual(response_no_loc.status_code, status.HTTP_200_OK)
+        self.assertIsNone(response_no_loc.data[0]["location"])
 
 
 class StudentQueryCountTestCase(TestCase):
